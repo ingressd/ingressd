@@ -30,6 +30,16 @@ on:
         required: false
       REGISTRY_PASSWORD:
         required: false
+      # Declared for actionlint only: the sign and panel jobs get these from
+      # their environments, and ci.yml does not pass them.
+      MINISIGN_SECRET_KEY:
+        required: false
+      PANEL_HOST_SSH_KEY:
+        required: false
+      PANEL_HOST:
+        required: false
+      PANEL_HOST_KNOWN_HOSTS:
+        required: false
   workflow_dispatch:
 
 permissions: {}
