@@ -49,7 +49,7 @@ jobs:
       prev: ${{ steps.version.outputs.prev }}
       digest: ${{ steps.pack.outputs.digest }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -76,7 +76,7 @@ jobs:
           echo "security=$security min_supported=${min:-none} previous release=${prev:-none}" >>"$GITHUB_STEP_SUMMARY"
       # Release builds never restore or save a cache: a poisoned cache must
       # not be able to reach signed binaries.
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
           check-latest: true
@@ -99,7 +99,7 @@ jobs:
           digest=$(sha256sum "$RUNNER_TEMP/release-build.tar" | cut -d' ' -f1)
           echo "digest=$digest" >>"$GITHUB_OUTPUT"
           echo "release-build.tar sha256 $digest" >>"$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-build-${{ steps.version.outputs.tag }}
           path: ${{ runner.temp }}/release-build.tar
@@ -117,7 +117,7 @@ jobs:
       id-token: write # Sigstore certificate
       attestations: write
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-build-${{ needs.build.outputs.tag }}
           path: ${{ runner.temp }}/in
@@ -138,7 +138,7 @@ jobs:
     environment: release-signing
     permissions: {}
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-build-${{ needs.build.outputs.tag }}
           path: ${{ runner.temp }}/in
@@ -178,7 +178,7 @@ jobs:
             echo "::error::release.json does not verify with pkg/release.ReleasePublicKey: put the public key of MINISIGN_SECRET_KEY there"; exit 1; }
       - if: always()
         run: rm -f "$RUNNER_TEMP/minisign.key"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-${{ needs.build.outputs.tag }}
           path: dist/
@@ -194,10 +194,10 @@ jobs:
       contents: write # tag and GitHub release
     steps:
       # Keeps the token: this job pushes the tag.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-${{ needs.build.outputs.tag }}
           path: dist
@@ -239,7 +239,7 @@ jobs:
     environment: release-publish
     permissions: {}
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-${{ needs.build.outputs.tag }}
           path: dist
@@ -283,7 +283,7 @@ jobs:
     env:
       TAG: ${{ needs.build.outputs.tag }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.build.outputs.tag }}
           persist-credentials: false
@@ -302,15 +302,15 @@ jobs:
             echo "registry=$REGISTRY"
             echo "username=${REGISTRY_USERNAME:-$GITHUB_ACTOR}"
           } >>"$GITHUB_OUTPUT"
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ${{ steps.reg.outputs.registry }}
           username: ${{ steps.reg.outputs.username }}
           password: ${{ secrets.REGISTRY_PASSWORD || github.token }}
       - id: meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ steps.reg.outputs.image }}
           tags: |
@@ -320,7 +320,7 @@ jobs:
             org.opencontainers.image.licenses=Apache-2.0
       # No build cache: release images are built from scratch.
       - id: build
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ${{ matrix.file }}
