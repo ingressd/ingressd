@@ -1,0 +1,123 @@
+add table inet homeedge # legacy homeedge name, remove after 2027-01
+delete table inet homeedge # legacy homeedge name, remove after 2027-01
+add table ip homeedge_nat # legacy homeedge name, remove after 2027-01
+delete table ip homeedge_nat # legacy homeedge name, remove after 2027-01
+add table ip homeedge_l4 # legacy homeedge name, remove after 2027-01
+delete table ip homeedge_l4 # legacy homeedge name, remove after 2027-01
+add table ip homeedge_smartdns # legacy homeedge name, remove after 2027-01
+delete table ip homeedge_smartdns # legacy homeedge name, remove after 2027-01
+add table inet ingressd
+delete table inet ingressd
+add table ip ingressd_nat
+delete table ip ingressd_nat
+add table ip ingressd_l4
+delete table ip ingressd_l4
+
+table inet ingressd {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ct state established,related accept
+		ct state invalid drop
+		iifname "lo" accept
+		meta l4proto { icmp, ipv6-icmp } accept
+		tcp dport { 22, 80, 443, 25565 } accept
+		udp dport { 443, 51820, 51821, 51822 } accept
+		iifname "ix-office" ip saddr 10.100.2.2 ip daddr 10.100.2.1 tcp dport 51819 accept
+	}
+
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+		ct state established,related accept
+		oifname "ix-home" ip daddr 192.168.0.40 tcp dport 30120 ct status dnat accept
+		oifname "ix-home" ip daddr 192.168.0.40 udp dport 30120 ct status dnat accept
+		oifname "ix-lab" ip daddr 192.168.50.9 udp dport 9000 ct status dnat accept
+		oifname "ix-lab" ip daddr 192.168.50.9 tcp dport 9000 ct status dnat accept
+	}
+}
+
+table ip ingressd_nat {
+	map vprefix_mark {
+		type ipv4_addr : mark
+		flags interval
+		elements = { 10.201.0.0/24 : 1000, 10.202.0.0/24 : 1002 }
+	}
+
+	chain output_route {
+		type route hook output priority mangle; policy accept;
+		meta mark set ip daddr map @vprefix_mark
+	}
+
+	chain output_nat {
+		type nat hook output priority -100; policy accept;
+		dnat ip prefix to ip daddr map { 10.201.0.0/24 : 192.168.0.0/24, 10.202.0.0/24 : 192.168.0.0/24 }
+	}
+}
+
+table ip ingressd_l4 {
+	set svc_fivem_static {
+		type ipv4_addr; flags interval;
+		elements = { 198.51.100.0/24 }
+	}
+
+	set svc_fivem_allow {
+		type ipv4_addr; flags timeout;
+	}
+
+	set svc_fivem_conn {
+		type ipv4_addr; size 65535; flags dynamic;
+	}
+
+	set svc_fivem_rate {
+		type ipv4_addr; size 65535; flags dynamic,timeout; timeout 1m;
+	}
+
+	set svc_game_x_static {
+		type ipv4_addr; flags interval;
+	}
+
+	set svc_game_x_allow {
+		type ipv4_addr; flags timeout;
+	}
+
+	chain filter {
+		type filter hook prerouting priority -160; policy accept;
+		iifname "ix-*" return
+		ct state != new return
+		fib daddr type != local return
+		meta l4proto . th dport vmap { tcp . 30120 : jump svc_fivem, udp . 30120 : jump svc_fivem, udp . 7777 : jump svc_game_x, tcp . 7778 : jump svc_game_x }
+	}
+
+	chain svc_fivem {
+		ip saddr != @svc_fivem_static ip saddr != @svc_fivem_allow drop
+		add @svc_fivem_conn { ip saddr ct count over 20 } drop
+		update @svc_fivem_rate { ip saddr limit rate over 30/second } drop
+	}
+
+	chain svc_game_x {
+		ip saddr != @svc_game_x_static ip saddr != @svc_game_x_allow drop
+	}
+
+	chain route_mark {
+		type filter hook prerouting priority mangle; policy accept;
+		iifname "ix-*" return
+		fib daddr type local tcp dport 30120 meta mark set 1000
+		fib daddr type local udp dport 30120 meta mark set 1000
+	}
+
+	chain prerouting {
+		type nat hook prerouting priority dstnat; policy accept;
+		iifname "ix-*" return
+		fib daddr type local tcp dport 30120 dnat to 192.168.0.40:30120
+		fib daddr type local udp dport 30120 dnat to 192.168.0.40:30120
+		fib daddr type local udp dport 7777 dnat to 192.168.50.9:9000
+		fib daddr type local tcp dport 7778 dnat to 192.168.50.9:9000
+	}
+
+	chain postrouting {
+		type nat hook postrouting priority srcnat; policy accept;
+		oifname "ix-lab" ip daddr 192.168.50.9 meta l4proto udp ct original proto-dst 7777 ct status dnat masquerade
+		oifname "ix-lab" ip daddr 192.168.50.9 meta l4proto tcp ct original proto-dst 7778 ct status dnat masquerade
+	}
+}
+add table ip ingressd_smartdns
+delete table ip ingressd_smartdns

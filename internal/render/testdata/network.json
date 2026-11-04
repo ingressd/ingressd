@@ -1,0 +1,72 @@
+{
+  "interfaces": [
+    {
+      "name": "ix-home",
+      "address": "10.100.1.1/24",
+      "listen_port": 51820,
+      "mtu": 1420,
+      "private_key": "EDGE-PRIV-home",
+      "peers": [
+        {
+          "public_key": "SITE-PUB-home",
+          "allowed_ips": [
+            "10.100.1.2/32",
+            "192.168.0.0/24"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "ix-office",
+      "address": "10.100.2.1/24",
+      "listen_port": 51821,
+      "mtu": 1420,
+      "private_key": "EDGE-PRIV-office",
+      "peers": [
+        {
+          "public_key": "SITE-PUB-office",
+          "allowed_ips": [
+            "10.100.2.2/32",
+            "192.168.0.0/24"
+          ]
+        }
+      ]
+    }
+  ],
+  "routes": [
+    {
+      "dst": "10.201.0.0/24",
+      "dev": "ix-home"
+    },
+    {
+      "dst": "192.168.0.0/24",
+      "dev": "ix-home",
+      "table": 1000
+    },
+    {
+      "dst": "10.202.0.0/24",
+      "dev": "ix-office"
+    },
+    {
+      "dst": "192.168.0.0/24",
+      "dev": "ix-office",
+      "table": 1001
+    }
+  ],
+  "rules": [
+    {
+      "priority": 10000,
+      "mark": 1000,
+      "table": 1000
+    },
+    {
+      "priority": 10001,
+      "mark": 1001,
+      "table": 1001
+    }
+  ],
+  "no_rp_filter": [
+    "ix-home",
+    "ix-office"
+  ]
+}

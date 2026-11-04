@@ -1,0 +1,46 @@
+# syntax=docker/dockerfile:1
+# ingressd-connector container: netstack mode (userspace WireGuard), no root,
+# no capabilities. Run it with host networking so LAN discovery sees the
+# home's subnets and UDP to the node works without NAT:
+#
+#   docker volume create ingressd-connector
+#   docker run --rm -v ingressd-connector:/var/lib/ingressd-connector \
+#     ghcr.io/ingressd/ingressd-connector enroll <join-string>
+#   docker run -d --name ingressd-connector --restart unless-stopped --network host \
+#     -v ingressd-connector:/var/lib/ingressd-connector ghcr.io/ingressd/ingressd-connector
+#
+# Build: docker build -f Dockerfile.connector -t ingressd-connector .
+#        (multi-arch: docker buildx build --platform linux/amd64,linux/arm64 ...)
+
+ARG GO_VERSION=1.26
+
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS build
+ARG TARGETOS TARGETARCH TARGETVARIANT
+ARG VERSION=dev
+ARG COMMIT=none
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY . .
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOARM=${TARGETVARIANT#v} \
+    go build -trimpath \
+      -ldflags "-s -w -X github.com/ingressd/ingressd/internal/version.Version=${VERSION} -X github.com/ingressd/ingressd/internal/version.Commit=${COMMIT}" \
+      -o /out/ingressd-connector ./cmd/ingressd-connector \
+ && mkdir -p /out/state
+
+FROM gcr.io/distroless/static-debian12:nonroot
+LABEL org.opencontainers.image.title="ingressd-connector" \
+      org.opencontainers.image.description="Links a home network to an ingressd node (WireGuard, userspace)" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.source="https://github.com/ingressd/ingressd"
+COPY --from=build /out/ingressd-connector /usr/local/bin/ingressd-connector
+# A fresh named volume inherits this directory's owner (nonroot, 65532).
+COPY --from=build --chown=65532:65532 /out/state /var/lib/ingressd-connector
+USER 65532:65532
+VOLUME ["/var/lib/ingressd-connector"]
+# As non-root the connector defaults to netstack mode at enrolment.
+# Container installs update by pulling a new image, never in place.
+ENV INGRESSD_INSTALL=docker
+ENTRYPOINT ["/usr/local/bin/ingressd-connector", "--state", "/var/lib/ingressd-connector/connector.json"]
+CMD ["run"]

@@ -1,0 +1,94 @@
+{
+  "admin": {
+    "listen": "unix//run/ingressd/caddy-admin.sock"
+  },
+  "apps": {
+    "http": {
+      "servers": {
+        "edge": {
+          "listen": [
+            ":443"
+          ],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "unix//run/ingressd/control.sock"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "edge.example.com",
+                    "play.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "body": "Unknown host\n",
+                  "handler": "static_response",
+                  "status_code": 404
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "layer4": {
+      "servers": {
+        "l4_minecraft_25565": {
+          "listen": [
+            "tcp/:25565"
+          ],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "proxy",
+                  "proxy_protocol": "v2",
+                  "upstreams": [
+                    {
+                      "dial": [
+                        "10.202.0.41:25565"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "pki": {
+      "certificate_authorities": {
+        "local": {
+          "install_trust": false
+        }
+      }
+    },
+    "tls": {
+      "automation": {
+        "policies": [
+          {
+            "issuers": [
+              {
+                "module": "internal"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

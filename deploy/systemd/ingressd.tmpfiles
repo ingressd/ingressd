@@ -1,0 +1,5 @@
+# Installed as /etc/tmpfiles.d/ingressd.conf. The sockets shared by the
+# control plane (root) and the edge (user ingressd): the edge creates its
+# admin socket here, and the sticky bit keeps it from removing or replacing
+# the control plane's sockets.
+d /run/ingressd 1770 root ingressd -

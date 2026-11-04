@@ -1,0 +1,102 @@
+# Changed path -> netns e2e suites (read by scripts/affected.sh).
+#
+#   <glob>  <suite>... | all | none
+#
+# Each changed file takes the FIRST line whose glob matches (bash pattern:
+# `*` also matches `/`, so `internal/l4/*` covers the whole subtree). A file
+# that matches no line runs ALL suites: only list a path once you know which
+# suites exercise it. Suite names are file names under test/netns without
+# "-e2e.sh" (l4-forwarding, managed-node, ...).
+#
+# A new suite runs for every unmapped path automatically (the default is
+# all). Give it lines here for the packages it is the main test of, and add
+# it to the lines of shared code it depends on.
+
+# --- No e2e impact -----------------------------------------------------------
+*.md                              none
+docs/*                            none
+LICENSE                           none
+NOTICE                            none
+.editorconfig                     none
+.gitattributes                    none
+.gitignore                        none
+.golangci.yml                     none
+.dockerignore                     none
+Dockerfile.*                      none
+.claude/*                         none
+examples/*                        none
+test/perf/*                       none
+test/netns/netmap-spike.sh        none
+*_test.go                         none
+scripts/build-release.sh          none
+scripts/deploy-nodes.sh           none
+scripts/check-edge-modules.sh     none
+.github/workflows/deploy*.yml     none
+
+# --- The pipeline itself: everything ------------------------------------------
+test/netns/lib.sh                 all
+test/netns/affected.map           all
+scripts/e2e.sh                    all
+scripts/affected.sh               all
+scripts/ci-netns-setup.sh         all
+.github/*                         all
+Makefile                          all
+
+# --- A suite's own script runs only that suite --------------------------------
+test/netns/tunnel-http-e2e.sh            tunnel-http
+test/netns/access-login-e2e.sh           access-login
+test/netns/access-idp-e2e.sh             access-idp
+test/fakeidp/*                    access-idp
+pkg/access/idp/*                  access-idp
+test/netns/l4-forwarding-e2e.sh          l4-forwarding
+test/netns/connector-transports-e2e.sh   connector-transports
+test/netns/load-balancing-e2e.sh         load-balancing
+test/netns/origin-tls-e2e.sh             origin-tls
+test/netns/waf-e2e.sh                    waf
+test/netns/cache-e2e.sh                  cache
+test/netns/logs-stats-e2e.sh             logs-stats
+test/netns/connector-join-e2e.sh         connector-join
+test/netns/multi-edge-e2e.sh             multi-edge
+test/netns/managed-node-e2e.sh           managed-node
+test/netns/smartdns-e2e.sh               smartdns
+test/netns/remote-updates-e2e.sh         remote-updates
+test/netns/smartdns-vpn-exits-e2e.sh     smartdns-vpn-exits
+
+# --- Test helpers ---------------------------------------------------------------
+test/netns/sdtool/*               smartdns smartdns-vpn-exits
+test/fakepanel/*                  managed-node remote-updates
+scripts/releasetool/*             remote-updates
+
+# --- Feature packages (the suites that exercise them) ---------------------------
+internal/smartdns/*               smartdns smartdns-vpn-exits
+internal/mesh/*                   smartdns smartdns-vpn-exits
+internal/l4/*                     l4-forwarding managed-node
+internal/connector/*              connector-transports connector-join multi-edge managed-node remote-updates
+cmd/ingressd-connector/*          connector-transports connector-join multi-edge remote-updates
+deploy/install-connector.sh       connector-join
+deploy/*                          none
+internal/nodeagent/*              managed-node multi-edge remote-updates
+pkg/nodeproto/*                   managed-node multi-edge remote-updates
+pkg/release/*                     remote-updates
+internal/storagerelay/*           cache managed-node
+internal/upgrade/*                managed-node remote-updates
+internal/auth/*                   access-login access-idp managed-node
+edge/modules/edgeauth/*           access-login access-idp managed-node
+internal/challenge/*              waf
+edge/modules/edgechallenge/*      waf
+internal/waf/*                    waf
+internal/geoip/*                  waf smartdns smartdns-vpn-exits
+internal/health/*                 load-balancing
+edge/modules/edgelb/*             load-balancing
+internal/pki/*                    origin-tls connector-join managed-node
+internal/edgecert/*               origin-tls connector-join managed-node
+internal/crawler/*                cache
+edge/modules/edgefallback/*       cache
+edge/modules/edgestorage/*        cache managed-node
+internal/observe/*                logs-stats managed-node
+internal/alerts/*                 logs-stats managed-node
+internal/backup/*                 logs-stats
+
+# Everything else (cmd/ingressd, internal/{apply,render,tunnel,controlsrv,
+# pipeline,secrets,...}, pkg/config, edge/cmd, edge/modules/{edgestate,
+# edgehello}, go.mod/go.sum, ...) is shared by every suite: all.

@@ -1,0 +1,214 @@
+{
+  "admin": {
+    "listen": "unix//run/ingressd/caddy-admin.sock"
+  },
+  "apps": {
+    "http": {
+      "servers": {
+        "edge": {
+          "listen": [
+            ":443"
+          ],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "unix//run/ingressd/control.sock"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "edge.example.com",
+                    "auth.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "handler": "headers",
+                          "request": {
+                            "delete": [
+                              "X-Edge-User-Email",
+                              "Edge-Jwt-Assertion",
+                              "X-Edge-Service-Token"
+                            ]
+                          }
+                        },
+                        {
+                          "handler": "reverse_proxy",
+                          "load_balancing": {
+                            "selection_policy": {
+                              "policy": "round_robin"
+                            }
+                          },
+                          "transport": {
+                            "dial_timeout": "5s",
+                            "protocol": "http"
+                          },
+                          "upstreams": [
+                            {
+                              "dial": "192.0.2.11:8080"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "app": "web",
+                          "control_host": "access.ingressd.internal",
+                          "control_socket": "/run/ingressd/control.sock",
+                          "default": [
+                            "family"
+                          ],
+                          "handler": "edge_auth",
+                          "jwt_key": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgTohYiduqGv16hl2T1vP3fOGtzle8cig/IqJUnUji592hRANCAARzf4dSjgQn+UtYdnN/pJeuiukBdj4m7d+AQ5fTv+kfhbWMH/F35YYwI9jL+P5riaGOtLY/QewPMEufozI2EXZf",
+                          "paths": [
+                            {
+                              "match": "/hook/*",
+                              "policies": [
+                                "hook"
+                              ]
+                            }
+                          ],
+                          "policies": {
+                            "family": {
+                              "action": "allow",
+                              "include": [
+                                {
+                                  "email": [
+                                    "alice@gmail.com"
+                                  ]
+                                }
+                              ],
+                              "version": "5c0470d8406a"
+                            },
+                            "hook": {
+                              "action": "service_auth",
+                              "include": [
+                                {
+                                  "service_token": [
+                                    "hook"
+                                  ]
+                                }
+                              ],
+                              "offline": true,
+                              "require": [
+                                {
+                                  "ip": [
+                                    "10.0.0.0/8"
+                                  ]
+                                }
+                              ],
+                              "version": "52f3cc62faa1"
+                            }
+                          },
+                          "portal_url": "https://auth.example.com",
+                          "service_tokens": [
+                            {
+                              "client_id": "hook.access",
+                              "expires": 1893456000,
+                              "name": "hook",
+                              "verifier": "8a303d1717cd48f735093fe8f3348a1a51019051a99128532c33531c2796dbbb"
+                            }
+                          ],
+                          "session_key": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+                        },
+                        {
+                          "handler": "reverse_proxy",
+                          "load_balancing": {
+                            "selection_policy": {
+                              "policy": "round_robin"
+                            }
+                          },
+                          "transport": {
+                            "dial_timeout": "5s",
+                            "protocol": "http"
+                          },
+                          "upstreams": [
+                            {
+                              "dial": "192.0.2.10:8080"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "web.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "body": "Unknown host\n",
+                  "handler": "static_response",
+                  "status_code": 404
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "pki": {
+      "certificate_authorities": {
+        "local": {
+          "install_trust": false
+        }
+      }
+    },
+    "tls": {
+      "automation": {
+        "policies": [
+          {
+            "issuers": [
+              {
+                "module": "internal"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+# ingressd configuration. Full reference: docs/DESIGN.md §4 and examples/config.yaml.
+# After editing, run: ingressd diff   (preview)   then   ingressd apply
+version: 1
+
+edge:
+  public_ipv4: 203.0.113.10           # this VM's public IP
+  admin:
+    hostname: edge.example.com         # sites and connectors dial this name; point it at the VM (DNS only, not proxied)
+  acme:
+    email: me@example.com
+    ca: letsencrypt                    # letsencrypt | letsencrypt_staging | internal
+    # dns_provider: { type: cloudflare, api_token: secret://cloudflare_dns_token }
+
+tunnels:
+  home:
+    site: router                       # router (e.g. UDM Pro) | connector
+    vendor: unifi
+    listen_port: 51820
+    transit: 10.100.1.0/24
+    # The edge routes exactly the addresses your apps point at; no LAN
+    # subnet needed. Add subnets: [...] only to make whole networks reachable.
+
+apps: {}
+#  server:
+#    hosts: [server.example.com]
+#    origin: http://192.168.0.17:8080
+#    tunnel: home

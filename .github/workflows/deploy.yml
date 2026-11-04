@@ -1,0 +1,108 @@
+# Manual rollout of a PUBLISHED release to the nodes of one environment over
+# SSH, one node at a time with health check and automatic rollback
+# (scripts/deploy-nodes.sh). Does nothing unless the environment has the
+# DEPLOY_SSH_KEY and DEPLOY_HOSTS secrets; DEPLOY_KNOWN_HOSTS is then
+# required (host keys are never trusted on first use). See
+# docs/RELEASING.md for the inventory format and docs/CI-SECURITY.md for
+# the environment settings (reviewers, branch restrictions).
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment (its secrets hold the inventory)
+        type: choice
+        options: [staging, production]
+        default: staging
+      version:
+        description: Release tag to deploy, e.g. v0.3.0 (must be published; pre-releases only to staging)
+        required: true
+      only:
+        description: Optional comma-separated node names (default all in the inventory)
+        required: false
+        default: ""
+      dry_run:
+        description: Only print what would be deployed
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy ${{ inputs.version }} to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 60
+    permissions:
+      contents: read # checkout and release download
+    env:
+      ENVIRONMENT: ${{ inputs.environment }}
+      VERSION: ${{ inputs.version }}
+      ONLY: ${{ inputs.only }}
+      DRY_RUN: ${{ inputs.dry_run }}
+    steps:
+      - name: Check deploy secrets
+        id: gate
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOSTS: ${{ secrets.DEPLOY_HOSTS }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          if [ -z "$DEPLOY_SSH_KEY" ] || [ -z "$DEPLOY_HOSTS" ]; then
+            echo "::notice::DEPLOY_SSH_KEY / DEPLOY_HOSTS are not set for environment '$ENVIRONMENT': nothing to deploy."
+            echo "Deployment skipped: no DEPLOY_SSH_KEY / DEPLOY_HOSTS secrets in environment \`$ENVIRONMENT\`." >>"$GITHUB_STEP_SUMMARY"
+            echo "enabled=false" >>"$GITHUB_OUTPUT"
+          elif [ -z "$DEPLOY_KNOWN_HOSTS" ]; then
+            echo "::error::DEPLOY_KNOWN_HOSTS is not set for environment '$ENVIRONMENT': add the nodes' ssh-keyscan lines (host keys are never trusted on first use)."
+            exit 1
+          else
+            echo "enabled=true" >>"$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Download and verify the release
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case $VERSION in v[0-9]*) ;; *) echo "::error::version must be a release tag like v0.3.0"; exit 1 ;; esac
+          info=$(gh release view "$VERSION" --json isDraft,isPrerelease --jq '"\(.isDraft) \(.isPrerelease)"') || {
+            echo "::error::release $VERSION not found (drafts are not visible here: publish it first)"; exit 1; }
+          read -r draft pre <<<"$info"
+          [ "$draft" = false ] || { echo "::error::$VERSION is a draft; publish it first"; exit 1; }
+          if [ "$pre" = true ] && [ "$ENVIRONMENT" = production ]; then
+            echo "::error::$VERSION is a pre-release; only staging accepts pre-releases"; exit 1
+          fi
+          mkdir -p release
+          gh release download "$VERSION" --dir release -p SHA256SUMS -p 'ingressd_linux_*' -p 'ingressd-edge_linux_*'
+          (cd release && sha256sum -c --ignore-missing SHA256SUMS)
+
+      - name: Roll out
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOSTS: ${{ secrets.DEPLOY_HOSTS }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          umask 077
+          printf '%s\n' "$DEPLOY_SSH_KEY" >"$RUNNER_TEMP/deploy_key"
+          [ -n "$DEPLOY_KNOWN_HOSTS" ] || { echo "::error::DEPLOY_KNOWN_HOSTS is empty"; exit 1; }
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" >"$RUNNER_TEMP/known_hosts"
+          args=(--release-dir release --version "$VERSION" --ssh-key "$RUNNER_TEMP/deploy_key" --known-hosts "$RUNNER_TEMP/known_hosts")
+          [ -n "$ONLY" ] && args+=(--only "$ONLY")
+          [ "$DRY_RUN" = true ] && args+=(--dry-run)
+          ./scripts/deploy-nodes.sh "${args[@]}"
+
+      - name: Remove the key
+        if: always() && steps.gate.outputs.enabled == 'true'
+        run: rm -f "$RUNNER_TEMP/deploy_key" "$RUNNER_TEMP/known_hosts"

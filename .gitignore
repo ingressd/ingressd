@@ -1,0 +1,9 @@
+/bin/
+/dist/
+*.test
+*.out
+coverage.*
+.env
+*.key
+!docs/**/*.key.example
+.claude/

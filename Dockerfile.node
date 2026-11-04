@@ -1,0 +1,64 @@
+# syntax=docker/dockerfile:1
+# ingressd node (ingressd + ingressd-edge) in one container. OPTIONAL: the
+# reference install is systemd (deploy/install.sh, deploy/install-node.sh).
+#
+# The node manages WireGuard interfaces, routes and nftables in the HOST's
+# network namespace, so the container needs host networking and NET_ADMIN,
+# and the host kernel must have the wireguard module (modprobe wireguard):
+#
+#   docker run -d --name ingressd --restart unless-stopped \
+#     --network host --cap-add NET_ADMIN --cap-add NET_RAW \
+#     -v ingressd-etc:/etc/ingressd -v ingressd-keys:/etc/ingressd-keys \
+#     -v ingressd-state:/var/lib/ingressd -v ingressd-edge:/var/lib/ingressd-edge \
+#     ingressd-node
+#
+# First start runs `ingressd init` (edit /etc/ingressd/config.yaml in the
+# volume, or enrol with a panel: docker exec ingressd ingressd node enroll ...).
+# Back up the ingressd-keys volume: it holds the age key for secrets.
+#
+# Build: docker build -f Dockerfile.node -t ingressd-node .
+
+ARG GO_VERSION=1.26
+
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS build
+ARG TARGETOS TARGETARCH
+ARG VERSION=dev
+ARG COMMIT=none
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY edge/go.mod edge/go.sum ./edge/
+RUN --mount=type=cache,target=/go/pkg/mod go mod download && cd edge && go mod download
+COPY . .
+ENV CGO_ENABLED=0
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
+      -ldflags "-s -w -X github.com/ingressd/ingressd/internal/version.Version=${VERSION} -X github.com/ingressd/ingressd/internal/version.Commit=${COMMIT}" \
+      -o /out/ingressd ./cmd/ingressd
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    cd edge && GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w" -o /out/ingressd-edge ./cmd/ingressd-edge
+
+FROM debian:bookworm-slim
+LABEL org.opencontainers.image.title="ingressd-node" \
+      org.opencontainers.image.description="ingressd edge node (control plane + Caddy edge); needs --network host and NET_ADMIN" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.source="https://github.com/ingressd/ingressd"
+# hadolint ignore=DL3008
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends wireguard-tools nftables iproute2 git ca-certificates tini \
+ && rm -rf /var/lib/apt/lists/*
+# The edge (Caddy) runs as this user, as under systemd (deploy/install.sh);
+# the entrypoint drops to it with setpriv (util-linux).
+RUN groupadd --system --gid 990 ingressd \
+ && useradd --system --uid 990 --gid ingressd --home-dir /var/lib/ingressd --shell /usr/sbin/nologin ingressd
+COPY --from=build /out/ingressd /out/ingressd-edge /usr/local/bin/
+COPY deploy/caddy-bootstrap.json /etc/ingressd-edge/bootstrap.json
+COPY deploy/docker/node-entrypoint.sh /usr/local/bin/ingressd-node-entrypoint
+ENV XDG_DATA_HOME=/var/lib/ingressd-edge XDG_CONFIG_HOME=/var/lib/ingressd-edge
+# Container installs update by pulling a new image, never in place.
+ENV INGRESSD_INSTALL=docker
+VOLUME ["/etc/ingressd", "/etc/ingressd-keys", "/var/lib/ingressd", "/var/lib/ingressd-edge"]
+# The control plane runs as root inside the container (WireGuard, routes and
+# nftables need it); the entrypoint starts the edge as user ingressd with
+# only CAP_NET_BIND_SERVICE, so Docker's default SETUID/SETGID/SETPCAP
+# capabilities must not be dropped.
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/ingressd-node-entrypoint"]

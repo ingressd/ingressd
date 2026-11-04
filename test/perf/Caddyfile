@@ -1,0 +1,41 @@
+# WAF performance baseline (docs/spikes/05-coraza-perf.md).
+# Run with: bin/ingressd-edge run --config test/perf/Caddyfile --adapter caddyfile
+{
+	admin off
+	auto_https off
+	order coraza_waf first
+}
+
+# Baseline: no WAF.
+:8080 {
+	respond "ok"
+}
+
+# OWASP CRS v4, paranoia level 1, blocking.
+:8081 {
+	coraza_waf {
+		load_owasp_crs
+		directives `
+			Include @coraza.conf-recommended
+			Include @crs-setup.conf.example
+			Include @owasp_crs/*.conf
+			SecRuleEngine On
+		`
+	}
+	respond "ok"
+}
+
+# Same, paranoia level 2.
+:8082 {
+	coraza_waf {
+		load_owasp_crs
+		directives `
+			Include @coraza.conf-recommended
+			Include @crs-setup.conf.example
+			SecAction "id:900000,phase:1,pass,t:none,nolog,setvar:tx.blocking_paranoia_level=2"
+			Include @owasp_crs/*.conf
+			SecRuleEngine On
+		`
+	}
+	respond "ok"
+}

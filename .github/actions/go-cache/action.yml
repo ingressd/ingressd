@@ -1,0 +1,59 @@
+name: Go with a per-job build cache
+description: >-
+  setup-go plus a build/module cache keyed by job, so one job's cache never
+  replaces another's (setup-go's built-in cache shares one key across every
+  job and keeps whichever finished first). Restores only; save with
+  actions/cache/save and the `key` output on pushes (pull requests read the
+  base branch's cache).
+inputs:
+  name:
+    description: Cache name (the job's own, e.g. "test", "build").
+    required: true
+  go-version:
+    description: Go version for setup-go.
+    default: stable
+  sum-files:
+    description: go.sum files the key hashes (newline separated globs).
+    default: |
+      go.sum
+      edge/go.sum
+outputs:
+  key:
+    description: Key to save the cache under at the end of the job.
+    value: ${{ steps.key.outputs.key }}
+  paths:
+    description: Cached paths.
+    value: ${{ steps.key.outputs.paths }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      with:
+        go-version: ${{ inputs.go-version }}
+        check-latest: true
+        cache: false
+    - id: key
+      shell: bash
+      env:
+        NAME: ${{ inputs.name }}
+        SUM_FILES: ${{ inputs.sum-files }}
+      run: |
+        v=$(go env GOVERSION)
+        # shellcheck disable=SC2086 # a file list
+        SUMS=$(cat $SUM_FILES | sha256sum | cut -c1-16)
+        echo "prefix=go-$RUNNER_OS-$v-$NAME-$SUMS-" >>"$GITHUB_OUTPUT"
+        echo "fallback=go-$RUNNER_OS-$v-$NAME-" >>"$GITHUB_OUTPUT"
+        echo "key=go-$RUNNER_OS-$v-$NAME-$SUMS-$GITHUB_SHA" >>"$GITHUB_OUTPUT"
+        {
+          echo "paths<<EOF"
+          go env GOCACHE
+          go env GOMODCACHE
+          echo "EOF"
+        } >>"$GITHUB_OUTPUT"
+    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ${{ steps.key.outputs.paths }}
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: |
+          ${{ steps.key.outputs.prefix }}
+          ${{ steps.key.outputs.fallback }}

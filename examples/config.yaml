@@ -1,0 +1,324 @@
+# Example ingressd configuration. See docs/DESIGN.md §4 for the full reference.
+# Values of the form secret://name are resolved from secrets.age.
+version: 1
+
+edge:
+  name: edge-lon1
+  public_ipv4: 203.0.113.10
+  public_ipv6: 2001:db8::10
+  admin:
+    hostname: edge.example.com
+    exposure: public                  # public | tunnel_only | ip_allowlist
+    ip_allowlist: []                  # CIDRs; /.ingressd/* (connectors) always stays public
+  acme:
+    email: me@example.com
+    ca: letsencrypt                   # letsencrypt | letsencrypt_staging | zerossl
+    dns_provider:
+      type: cloudflare
+      api_token: secret://cloudflare_dns_token
+  geoip:
+    maxmind_account_id: "123456"
+    maxmind_license_key: secret://maxmind_key
+  crowdsec:
+    enabled: false
+    lapi_url: http://127.0.0.1:8080
+    api_key: secret://crowdsec_bouncer_key
+
+email:
+  provider: ses                       # ses | smtp | log | panel (managed nodes: the panel sends the codes)
+  region: eu-west-2
+  from: "ingressd <login@example.com>"
+  access_key_id: secret://ses_access_key_id
+  secret_access_key: secret://ses_secret_access_key
+  # provider: smtp
+  # smtp: { host: smtp.example.com, port: 587, username: login, password: secret://smtp_password, tls: starttls }
+  # provider: log                     # writes messages to a file instead (testing)
+  # log: { path: /var/lib/ingressd/mail.log }
+  # provider: panel                   # set by the hosted panel; no other email settings
+
+access:
+  portal_host: auth.example.com       # login portal; required once any app has access policies
+  session: 24h                        # portal sign-in lifetime (app cookies never outlive it)
+  otp:
+    length: 6                         # 4-8 digits
+    ttl: 5m                           # 1m-15m
+    attempts: 5                       # wrong guesses per code, then lockout
+    resend_cooldown: 60s
+    per_email: { codes: 5, window: 15m }
+    per_ip: { codes: 20, window: 15m }
+    lockout: 15m
+  branding:
+    name: Example Home
+    logo_url: https://example.com/logo.png
+    color: "#2563eb"
+  # Managed nodes (set by the panel): org-wide keys so every node of the org
+  # accepts every session, and revocations from the other nodes.
+  # session_key: secret://org_access_session_key
+  # jwt_key: secret://org_access_jwt_key
+  # revoked_before: { "*": 2026-11-03T10:00:00Z, "a@example.com": 2026-11-03T12:00:00Z }
+  # revoked_sessions: [sid…]
+  # Sign-in providers besides the emailed code (docs/ACCESS-PROVIDERS.md has
+  # the app-registration steps). Apps offer them with login_methods.
+  providers:
+    discord: { client_id: "1300000000000000000", client_secret: secret://discord_client_secret }
+    google: { client_id: 123-abc.apps.googleusercontent.com, client_secret: secret://google_client_secret }
+    microsoft:
+      client_id: 00000000-0000-0000-0000-000000000000
+      client_secret: secret://microsoft_client_secret
+      tenant: common                  # common | organizations | consumers | <tenant ID>
+    steam:
+      api_key: secret://steam_api_key # only for steam_group / steam_app selectors
+      session: 4h                     # memberships are re-read at sign-in: shorter applies changes sooner
+
+certificates:
+  wildcards: ["*.example.com", "example.com"]
+  origin_ca:                          # private CA for origin certs + the edge's mTLS client cert
+    enabled: true                     # generated on the next apply (keys in secrets.age)
+    common_name: "ingressd Origin CA" # issue certs: ingressd cert origin issue --san host --san 192.168.0.17
+
+tunnels:
+  home:
+    type: wireguard
+    site: router                      # router | connector
+    vendor: unifi
+    listen_port: 51820
+    transit: 10.100.1.0/24            # edge .1, site .2
+    # No subnets: the edge routes exactly the addresses apps/pools/l4 point at.
+    keepalive: 25
+    public_key: "REPLACE_WITH_SITE_PUBLIC_KEY="
+  cloud-backup:
+    type: wireguard
+    site: connector                   # enroll: ingressd tunnel enroll-token cloud-backup
+    listen_port: 51821
+    transit: 10.100.2.0/24
+    subnets: [10.0.1.0/24]            # optional: make a whole network reachable
+    fallback_ws: true                 # allow WireGuard over WebSocket (443) when UDP is blocked
+
+groups:
+  family:
+    emails: [alice@gmail.com, bob@outlook.com]
+  work:
+    email_domains: [example.com]
+
+service_tokens:
+  ha-webhook:
+    client_id: 3f9c2b1e.access
+    client_secret: secret://svc_ha_webhook
+    expires: 2027-11-01
+  deploy-bot:                         # a header token: the secret alone in a header of your choice
+    header: X-Deploy-Token            # removed before the request reaches the origin
+    client_secret: secret://deploy_bot_token   # at least 16 characters
+    expires: 2027-06-30
+
+policies:
+  family-or-work:
+    action: allow
+    include: [{ group: family }, { group: work }]
+    exclude: [{ country: [RU, CN] }]  # needs <state-dir>/geoip/GeoLite2-Country.mmdb
+    session: 24h
+  admins-only:
+    action: allow
+    include: [{ email: [me@example.com] }]
+    require: [{ ip: [81.2.3.0/24] }]
+    session: 8h
+  ha-webhook:
+    action: service_auth
+    include: [{ service_token: ha-webhook }]
+  deploy-bot:
+    action: service_auth
+    include: [{ service_token: deploy-bot }]
+    require: [{ ip: [198.51.100.0/24] }]   # header token AND the CI network
+  discord-mods:
+    action: allow
+    include: [{ discord_role: ["1100000000000000000/1200000000000000000"] }]   # <server ID>/<role ID>
+    exclude: [{ discord_user: ["1300000000000000001"] }]
+    session: 4h
+  steam-friends:
+    action: allow
+    include: [{ steam_group: ["103582791429521412"] }, { steam_id: ["76561198000000001"] }]
+  workspace:
+    action: allow
+    include: [{ google_hd: [example.com] }, { microsoft_group: ["11111111-2222-3333-4444-555555555555"] }]
+  public:
+    action: bypass
+    include: [{ everyone: true }]
+
+pools:
+  server-pool:
+    steering: weighted                # round_robin | weighted | least_conn | failover | random | ip_hash
+    sticky: { cookie: edge_aff, ttl: 1h }
+    failback: auto                    # auto | manual (ingressd pool failback <pool>)
+    failback_hold: 2m                 # healthy this long before returning to a better tier
+    health:                           # active checks run by ingressd serve, through the tunnel
+      type: http                      # http | tcp
+      method: GET                     # GET | HEAD
+      path: /healthz
+      host: server.example.com
+      interval: 10s
+      timeout: 3s
+      expect_status: [200]
+      # expect_body: "ok"             # optional regular expression
+      unhealthy_after: 3              # consecutive results before changing state
+      healthy_after: 3
+    # Origins: lowest priority tier with a healthy origin gets new sessions,
+    # split by weight. state: active | draining (sticky sessions only) | disabled.
+    # Runtime changes without editing config: ingressd pool drain|disable|enable|override.
+    origins:
+      - { name: home-1, tunnel: home,         address: https://192.168.0.17:8443, weight: 50, priority: 1 }
+      - { name: home-2, tunnel: home,         address: https://192.168.0.18:8443, weight: 50, priority: 1 }
+      - { name: cloud,  tunnel: cloud-backup, address: https://10.0.1.5:8443,     priority: 2 }
+    fallback: always_online
+
+apps:
+  server:
+    hosts: [server.example.com]
+    pool: server-pool
+    # origin: off (http://) | full (https://, unverified; default for https://) | strict
+    # verify_with: origin_ca | public | custom:<secret holding PEM CAs>; mtls: present the edge client cert
+    tls: { origin: strict, verify_with: origin_ca, server_name: server.internal, mtls: true }
+    access: [admins-only]             # policy names; first match wins
+    paths:
+      - { match: /api/webhook/*, access: [ha-webhook] }
+    waf:
+      mode: block                     # off | detect | block
+      paranoia: 1                     # 1-4
+      exclusions:                     # from: ingressd waf suggest-exclusion <event-id>
+        - { rule: 942100, path: /api/search, target: "ARGS:q" }
+    rate_limit:
+      - { match: /login, requests: 10, per: 1m, key: ip }
+      - { match: /api/*, requests: 600, per: 1m, key: "header:X-Api-Key" }
+    security: { ip_deny: [192.0.2.0/24] }
+
+  wiki:
+    hosts: [wiki.example.com]
+    origin: http://192.168.0.21:3000
+    tunnel: home
+    access: [deploy-bot, discord-mods, steam-friends, workspace, family-or-work]
+    login_methods: [email, discord, steam, google, microsoft]   # default: [email]
+
+  portfolio:
+    hosts: [example.com, www.example.com]
+    origin: http://192.168.0.20:3000  # shorthand for a single-origin pool
+    tunnel: home
+    access: [public]
+    waf: { mode: block, paranoia: 2 }
+    bot_challenge: suspicious         # off | suspicious | always | under_attack
+    rate_limit: [{ match: /contact, requests: 5, per: 10m, action: challenge }]
+    cache:
+      enabled: true
+      default_ttl: 10m                # when the origin sends no max-age
+      stale_if_error: 7d              # serve expired entries while the origin is down (max 7d)
+      bypass_paths: [/api/]           # never cached; Authorization/session cookies always bypass
+      vary: [Accept-Encoding]         # request headers in the cache key (never cookies)
+    always_online:                    # public apps only
+      enabled: true
+      mode: fallback                  # fallback (when the origin fails) | static_mirror (always)
+      crawl: { schedule: "0 4 * * *", start: [/], max_pages: 2000, max_bytes: 256MB, keep: 3 }
+      banner: true                    # "cached copy" notice in snapshot HTML
+
+# Global IP and geo rules (per-app `security` adds to the deny lists and
+# replaces the allow lists). Country and ASN rules need edge.geoip.
+security:
+  ip_deny: []
+  country_deny: []
+  asn_deny: []
+  under_attack: false               # challenge every visitor on every app
+  good_bots: true                   # verified Googlebot/Bingbot skip the challenge
+
+l4:
+  fivem:
+    preset: fivem                     # fivem | minecraft_java | minecraft_bedrock | custom
+    listen: [30120/tcp, 30120/udp]    # defaults from the preset
+    target: { tunnel: home, address: 192.168.0.40, port: 30120 }
+    mode: transparent                 # proxy | transparent (site routes replies via the tunnel)
+    access: login_to_play             # public | allowlist | login_to_play
+    login_to_play: { policy: family-or-work, ttl: 12h, portal_host: play.example.com }
+    limits: { conn_per_ip: 20, new_conn_rate: 30/s }
+  minecraft:
+    preset: minecraft_java
+    listen: [25565/tcp]
+    target: { tunnel: home, address: 192.168.0.41, port: 25565 }
+    mode: proxy
+    proxy_protocol: v2                # none | v1 | v2 (TCP only; served by caddy-l4)
+    access: public
+  bedrock:
+    preset: minecraft_bedrock
+    target: { tunnel: home, address: 192.168.0.41 }
+    access: allowlist
+    allowlist: [198.51.100.0/24]      # plus runtime entries: ingressd l4 allow bedrock <ip>
+
+# Control panel users. Credentials (argon2id password hash, TOTP seed, passkeys)
+# live in secrets.age. The first owner is created in the browser with the setup
+# link printed by `ingressd init`; add more in the UI or with `ingressd admin create`.
+admins:
+  - { name: Alex, email: alex@example.com, role: owner }          # owner | admin | operator | viewer
+  - { name: Sam, email: sam@example.com, role: operator, scope: { l4: [fivem, minecraft] } }
+
+alerts:
+  channels:
+    phone: { type: ntfy, url: https://ntfy.sh/my-topic-xyz }
+    discord: { type: discord, webhook: secret://discord_webhook }
+    ops: { type: webhook, url: https://hooks.example.com/ingressd }
+    mail: { type: email, to: [me@example.com] }   # sent via the email provider above
+  rules:
+    # Events: tunnel_down origin_down pool_failover pool_all_down cert_expiring
+    # cert_renewal_failed waf_spike auth_bruteforce admin_login_new_location
+    # email_delivery_failing disk_low backup_failed apply_failed.
+    # Each rule sends the firing notice and the recovery.
+    - { on: [tunnel_down, pool_all_down, cert_renewal_failed], notify: [phone, discord] }
+    - { on: [cert_expiring, disk_low, backup_failed, apply_failed], notify: [mail, ops] }
+  quiet_hours: { start: "23:00", end: "07:00", timezone: Europe/London, except: [tunnel_down] }
+  repeat_after: 24h                   # re-send alerts still firing after this long
+
+logging:
+  retention: 7d                       # individual access-log entries (aggregates: 30 days)
+  access_log_sampling: 1.0            # fraction of requests stored individually
+
+backups:
+  schedule: "0 3 * * *"               # cron, @daily, or "@every 6h"
+  keep: 14
+  local_dir: /var/lib/ingressd/backups
+  passphrase: secret://backup_passphrase   # archives restore without the key file
+  s3:
+    endpoint: s3.eu-west-2.amazonaws.com
+    region: eu-west-2
+    bucket: my-ingressd-backups
+    prefix: edge-lon1/
+    access_key: secret://backup_s3_access_key
+    secret_key: secret://backup_s3_secret_key
+  git_remote: git@github.com:me/ingressd-config.git
+
+# Node mesh (normally compiled by the panel): WireGuard ix-mesh between the
+# nodes of one org. This node's key is the secret wg-mesh-node (generated;
+# `ingressd smartdns mesh-key` prints the public key).
+mesh:
+  address: 10.255.0.1/16
+  listen_port: 51900                  # UDP, opened in the managed firewall
+  peers:
+    nod_ams1:                         # node id
+      name: ams1
+      public_key: "eEvqkSJVw/7cGUEcJXmeHiNFDLBGOz8GpScshecvNHU="
+      endpoint: ams1.example.net:51900
+      address: 10.255.0.2/32
+
+# Smart DNS: the resolver and SNI relay listen on the tunnels' transit
+# addresses (default) so the homes can forward service domains here. Names
+# are resolved at the service's exit and answered with this node's transit
+# address; the relay forwards the streams over the mesh to the exit node.
+smartdns:
+  enabled: true
+  # listen: [10.100.1.1]              # default: every tunnel's edge transit address
+  upstream: [1.1.1.1, 9.9.9.9]        # for names no service routes
+  exits:
+    nl: { node: nod_ams1, country: NL }
+    # An exit on this node egressing through a VPN (WireGuard .conf in a secret):
+    # uk: { node: self, country: GB, vpn: secret://proton_uk }
+  services:
+    streamtv:
+      catalog: streamtv
+      domains: [stream.example, streamtv.example, watch-stream.example]
+      exit: nl
+  # Edge location checks for services on CDNs whose edges geolocate viewers
+  # themselves; the panel fills these in from its service catalog.
+  # checks:
+  #   - { domains: [stream.example], host: tv.stream.example, path: /v1/location, field: countryCode }

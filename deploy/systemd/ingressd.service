@@ -1,0 +1,44 @@
+[Unit]
+Description=ingressd control plane
+Documentation=https://github.com/ingressd/ingressd
+After=network-online.target ingressd-edge.service
+Wants=network-online.target
+Requires=ingressd-edge.service
+
+[Service]
+Type=simple
+# Root is needed to manage WireGuard interfaces, routes and nftables; the
+# sandbox below limits what else a compromised control plane can reach.
+ExecStart=/usr/local/bin/ingressd serve
+Restart=on-failure
+RestartSec=5s
+# Nothing serve runs (git, nft, systemctl, systemd-run) is setuid.
+NoNewPrivileges=yes
+# Read-only OS except what serve writes: config and its git history, the
+# secrets key, state (backups.local_dir defaults below it; another
+# local_dir needs a drop-in with ReadWritePaths=), the sockets shared with
+# the edge, and the binaries for self-upgrade. Managed upgrades normally
+# run as a transient unit (systemd-run) outside this sandbox; the binary
+# dir covers the in-process fallback.
+ProtectSystem=strict
+ReadWritePaths=/etc/ingressd -/etc/ingressd-keys /var/lib/ingressd /run/ingressd /usr/local/bin
+ProtectHome=true
+PrivateTmp=true
+# Kernel modules are loaded by the installer (modprobe wireguard) or
+# auto-loaded by the kernel itself (nftables), never by serve.
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+# Not ProtectKernelTunables=: apply writes /proc/sys (forwarding, rp_filter).
+# Netlink: WireGuard, routes, nftables; unix: Caddy and systemd; inet: panel,
+# ACME/DNS, health checks.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+# NET_ADMIN: interfaces, routes, nftables, SO_MARK; NET_RAW: SO_BINDTODEVICE
+# (Smart DNS egress); NET_BIND_SERVICE: Smart DNS on port 53; CHOWN/FOWNER:
+# sharing sockets with the edge group; DAC_*: reading and managing the
+# edge-owned directories below /var/lib/ingressd; KILL: the upgrade helper
+# stopping the previous process.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_KILL
+
+[Install]
+WantedBy=multi-user.target

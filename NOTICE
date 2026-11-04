@@ -1,0 +1,17 @@
+ingressd
+Copyright 2026 The ingressd Authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It includes or links third-party software under their own licences,
+among them Caddy (Apache-2.0), wireguard-go (MIT), gVisor (Apache-2.0),
+Coraza (Apache-2.0) and miekg/dns (BSD-3-Clause). See each module's
+licence in go.mod / edge/go.mod dependencies.
+
+Adapted source code:
+
+- internal/connector/client/netstack.go contains code adapted from
+  wireguard-go (golang.zx2c4.com/wireguard, tun/netstack),
+  Copyright (C) WireGuard LLC. All Rights Reserved.
+  Licensed under the MIT License; the licence text is reproduced in the
+  header of that file.

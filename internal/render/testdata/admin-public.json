@@ -1,0 +1,22 @@
+[
+  {
+    "handle": [
+      {
+        "handler": "reverse_proxy",
+        "upstreams": [
+          {
+            "dial": "unix//run/ingressd/control.sock"
+          }
+        ]
+      }
+    ],
+    "match": [
+      {
+        "host": [
+          "edge.example.net"
+        ]
+      }
+    ],
+    "terminal": true
+  }
+]

@@ -1,0 +1,414 @@
+{
+  "admin": {
+    "listen": "unix//run/ingressd/caddy-admin.sock"
+  },
+  "apps": {
+    "cache": {
+      "api": {
+        "souin": {
+          "enable": true
+        }
+      }
+    },
+    "http": {
+      "servers": {
+        "edge": {
+          "listen": [
+            ":443"
+          ],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "static_response",
+                  "headers": {
+                    "Location": [
+                      "https://example.com{http.request.uri}"
+                    ]
+                  },
+                  "status_code": 301
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "www.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "handler": "headers",
+                          "request": {
+                            "delete": [
+                              "X-Edge-User-Email",
+                              "Edge-Jwt-Assertion",
+                              "X-Edge-Service-Token"
+                            ]
+                          }
+                        },
+                        {
+                          "handler": "edge_fallback",
+                          "mode": "fallback",
+                          "root": "/var/lib/ingressd/snapshots/site"
+                        },
+                        {
+                          "handler": "subroute",
+                          "routes": [
+                            {
+                              "handle": [
+                                {
+                                  "handler": "headers",
+                                  "request": {
+                                    "add": {
+                                      "Cache-Control": [
+                                        "stale-if-error=604800"
+                                      ]
+                                    }
+                                  }
+                                },
+                                {
+                                  "Configuration": {
+                                    "DefaultCache": {
+                                      "allowed_http_verbs": [
+                                        "GET",
+                                        "HEAD"
+                                      ],
+                                      "badger": {
+                                        "configuration": {
+                                          "BlockCacheSize": 33554432,
+                                          "Dir": "/var/lib/ingressd/cache",
+                                          "MemTableSize": 16777216,
+                                          "ValueDir": "/var/lib/ingressd/cache",
+                                          "ValueLogFileSize": 67108864
+                                        },
+                                        "found": true,
+                                        "path": "/var/lib/ingressd/cache"
+                                      },
+                                      "cache_name": "ingressd",
+                                      "key": {
+                                        "headers": [
+                                          "Accept-Encoding"
+                                        ]
+                                      },
+                                      "stale": "168h0m0s",
+                                      "ttl": "10m0s"
+                                    }
+                                  },
+                                  "handler": "cache"
+                                },
+                                {
+                                  "handler": "headers",
+                                  "response": {
+                                    "add": {
+                                      "Cache-Control": [
+                                        "private"
+                                      ]
+                                    },
+                                    "deferred": true,
+                                    "require": {
+                                      "headers": {
+                                        "Set-Cookie": []
+                                      }
+                                    }
+                                  }
+                                }
+                              ],
+                              "match": [
+                                {
+                                  "not": [
+                                    {
+                                      "header": {
+                                        "Authorization": []
+                                      }
+                                    },
+                                    {
+                                      "header_regexp": {
+                                        "Cookie": {
+                                          "pattern": "(?i)(^|;\\s*)[^=;]*(sess|auth|token|login|jwt|sid|remember)[^=;]*="
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "path": [
+                                        "/api/*"
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "handle": [
+                                {
+                                  "handler": "reverse_proxy",
+                                  "load_balancing": {
+                                    "selection_policy": {
+                                      "policy": "round_robin"
+                                    }
+                                  },
+                                  "transport": {
+                                    "dial_timeout": "5s",
+                                    "protocol": "http"
+                                  },
+                                  "upstreams": [
+                                    {
+                                      "dial": "10.201.0.20:3000"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "handler": "headers",
+                          "request": {
+                            "delete": [
+                              "X-Edge-User-Email",
+                              "Edge-Jwt-Assertion",
+                              "X-Edge-Service-Token"
+                            ]
+                          }
+                        },
+                        {
+                          "handler": "headers",
+                          "request": {
+                            "set": {
+                              "X-Edge": [
+                                "1"
+                              ]
+                            }
+                          }
+                        },
+                        {
+                          "handler": "headers",
+                          "response": {
+                            "deferred": true,
+                            "delete": [
+                              "Server"
+                            ],
+                            "set": {
+                              "Permissions-Policy": [
+                                "camera=(), microphone=(), geolocation=()"
+                              ],
+                              "Referrer-Policy": [
+                                "strict-origin-when-cross-origin"
+                              ],
+                              "Strict-Transport-Security": [
+                                "max-age=31536000"
+                              ],
+                              "X-Content-Type-Options": [
+                                "nosniff"
+                              ],
+                              "X-Frame-Options": [
+                                "DENY"
+                              ]
+                            }
+                          }
+                        },
+                        {
+                          "handler": "request_body",
+                          "max_size": 10485760
+                        },
+                        {
+                          "handler": "reverse_proxy",
+                          "health_checks": {
+                            "passive": {
+                              "fail_duration": "30s",
+                              "max_fails": 1
+                            }
+                          },
+                          "load_balancing": {
+                            "selection_policy": {
+                              "policy": "edge_tiered",
+                              "pool": "web",
+                              "steering": "weighted",
+                              "sticky": {
+                                "cookie": "edge_aff",
+                                "ttl": "30m0s"
+                              },
+                              "upstreams": [
+                                {
+                                  "dial": "10.201.0.17:8443",
+                                  "origin": "a",
+                                  "priority": 1,
+                                  "weight": 3
+                                },
+                                {
+                                  "dial": "10.202.0.17:8443",
+                                  "origin": "b",
+                                  "priority": 1,
+                                  "weight": 1
+                                },
+                                {
+                                  "dial": "10.201.0.19:8443",
+                                  "origin": "d",
+                                  "priority": 2,
+                                  "state": "draining",
+                                  "weight": 1
+                                }
+                              ]
+                            },
+                            "try_duration": "5s"
+                          },
+                          "transport": {
+                            "dial_timeout": "5s",
+                            "protocol": "http",
+                            "read_timeout": "30s",
+                            "tls": {
+                              "insecure_skip_verify": true
+                            },
+                            "write_timeout": "30s"
+                          },
+                          "upstreams": [
+                            {
+                              "dial": "10.201.0.17:8443"
+                            },
+                            {
+                              "dial": "10.202.0.17:8443"
+                            },
+                            {
+                              "dial": "10.201.0.19:8443"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "web.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "handler": "headers",
+                          "request": {
+                            "delete": [
+                              "X-Edge-User-Email",
+                              "Edge-Jwt-Assertion",
+                              "X-Edge-Service-Token"
+                            ]
+                          }
+                        },
+                        {
+                          "handler": "reverse_proxy",
+                          "load_balancing": {
+                            "selection_policy": {
+                              "policy": "round_robin"
+                            }
+                          },
+                          "transport": {
+                            "dial_timeout": "5s",
+                            "protocol": "http"
+                          },
+                          "upstreams": [
+                            {
+                              "dial": "10.201.0.30:80"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "*.lab.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "body": "Unknown host\n",
+                  "handler": "static_response",
+                  "status_code": 404
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "tls": {
+      "automation": {
+        "policies": [
+          {
+            "issuers": [
+              {
+                "ca": "https://acme-v02.api.letsencrypt.org/directory",
+                "challenges": {
+                  "dns": {
+                    "provider": {
+                      "api_token": "CF-TOKEN",
+                      "name": "cloudflare"
+                    }
+                  }
+                },
+                "email": "me@example.com",
+                "module": "acme",
+                "test_ca": "https://acme-v02.api.letsencrypt.org/directory"
+              }
+            ]
+          }
+        ]
+      },
+      "certificates": {
+        "automate": [
+          "*.example.com"
+        ]
+      }
+    }
+  },
+  "storage": {
+    "module": "file_system",
+    "root": "/var/lib/ingressd/caddy"
+  }
+}
