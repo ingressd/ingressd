@@ -353,6 +353,4 @@ jobs:
       id-token: write # cosign keyless signing, build provenance
       attestations: write # build provenance attestations
     uses: ./.github/workflows/release.yml
-    secrets:
-      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
-      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+    secrets: inherit

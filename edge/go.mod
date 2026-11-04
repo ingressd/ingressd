@@ -2,7 +2,7 @@
 // control plane. Plugin versions are pinned here (and in go.sum) by `go mod tidy`.
 module github.com/ingressd/ingressd/edge
 
-go 1.26.1
+go 1.27.1
 
 require (
 	aidanwoods.dev/go-paseto v1.6.0
@@ -11,7 +11,7 @@ require (
 	github.com/caddyserver/caddy/v2 v2.11.7
 	github.com/caddyserver/certmagic v0.25.6
 	github.com/corazawaf/coraza-caddy/v2 v2.6.2
-	github.com/darkweak/storages/badger/caddy v0.0.20
+	github.com/darkweak/storages/badger/caddy v0.0.22
 	github.com/hslatman/caddy-crowdsec-bouncer v0.15.0
 	github.com/mholt/caddy-l4 v0.1.2
 	github.com/mholt/caddy-ratelimit v0.1.0
@@ -57,8 +57,8 @@ require (
 	github.com/crowdsecurity/crowdsec v1.8.1 // indirect
 	github.com/crowdsecurity/go-cs-lib v0.0.25 // indirect
 	github.com/darkweak/souin v1.7.9 // indirect
-	github.com/darkweak/storages/badger v0.0.19 // indirect
-	github.com/darkweak/storages/core v0.0.20 // indirect
+	github.com/darkweak/storages/badger v0.0.21 // indirect
+	github.com/darkweak/storages/core v0.0.21 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dgraph-io/badger v1.6.2 // indirect
 	github.com/dgraph-io/badger/v2 v2.2007.4 // indirect
@@ -75,9 +75,9 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.4 // indirect
 	github.com/gaissmai/bart v0.28.0 // indirect
-	github.com/go-chi/chi/v5 v5.3.2 // indirect
+	github.com/go-chi/chi/v5 v5.4.0 // indirect
 	github.com/go-jose/go-jose/v3 v3.0.5 // indirect
-	github.com/go-jose/go-jose/v4 v4.1.5 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.6 // indirect
 	github.com/go-json-experiment/json v0.0.0-20260214004413-d219187c3433 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
