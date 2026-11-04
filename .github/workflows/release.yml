@@ -30,10 +30,8 @@ on:
         required: false
       REGISTRY_PASSWORD:
         required: false
-      # The sign and panel jobs read these from their environments
-      # (release-signing, release-publish), whose secrets take precedence.
-      # ci.yml passes the repository-level copies as a fallback while the
-      # repository is private (see the comment there).
+      # Declared for actionlint only: the sign and panel jobs get these from
+      # their environments, and ci.yml does not pass them.
       MINISIGN_SECRET_KEY:
         required: false
       PANEL_HOST_SSH_KEY:

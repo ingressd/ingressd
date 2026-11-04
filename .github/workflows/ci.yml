@@ -345,13 +345,8 @@ jobs:
     name: release
     needs: [checks, e2e-result]
     if: github.event_name == 'push' && github.ref == 'refs/heads/release'
-    # The called jobs ask for no more than this. Signing and panel secrets
-    # belong in the release-signing / release-publish environments of the
-    # called jobs. While the repository is private on GitHub's free plan,
-    # environment secrets are not given to workflows, so the repository-level
-    # copies are passed as a fallback (an environment secret of the same name
-    # wins once it is delivered). Remove these four lines, and the
-    # repository secrets, once the repository is public.
+    # The called jobs ask for no more than this. Signing and panel secrets come
+    # only from the release-signing and release-publish environments.
     permissions:
       contents: write # tag and GitHub release
       packages: write # container images
@@ -361,7 +356,3 @@ jobs:
     secrets:
       REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
       REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
-      MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
-      PANEL_HOST_SSH_KEY: ${{ secrets.PANEL_HOST_SSH_KEY }}
-      PANEL_HOST: ${{ secrets.PANEL_HOST }}
-      PANEL_HOST_KNOWN_HOSTS: ${{ secrets.PANEL_HOST_KNOWN_HOSTS }}
