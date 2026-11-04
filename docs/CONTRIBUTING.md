@@ -19,7 +19,7 @@ How the code fits together, where new features plug in, and how to build and tes
 | `internal/tunnel` | WireGuard keys, site configs, tunnel status |
 | `internal/controlsrv` | Host-routed control HTTP server, `ClientIP` |
 | `internal/pipeline` | The apply pipeline shared by the CLI, serve and the node agent (validate → render → diff → apply → commit), serialized per process |
-| `internal/nodeagent` | Managed mode (rev1): enrolment (`node.json`), the WebSocket control channel to the panel, signed snapshots applied through the pipeline, status/usage/live logs/diagnostics, node-answered requests, Smart DNS hooks (`hooks.go`), detach |
+| `internal/nodeagent` | Managed mode (rev1): enrolment (`node.json`), the WebSocket control channel to the panel, signed snapshots applied through the pipeline, status/usage/live logs/diagnostics, node-answered requests, exit routing hooks (`hooks.go`), detach |
 | `internal/edgecert` | Edge certificates in Caddy storage (`ingressd cert list`, managed-mode cert status) and the internal CA root |
 | `pkg/nodeproto` | Panel ↔ node protocol types (shared with the panel; additive changes only) |
 | `test/fakepanel` | Minimal panel (enrol + control channel + `/test/` API) for unit and netns tests of managed mode |
@@ -37,7 +37,7 @@ Several features are developed in parallel. To keep merges easy, put new logic i
 - **CLI:** new `cmd/ingressd/cmd_<feature>.go`; register it in `newRootCmd` (one line).
 - **Caddy modules:** new package under `edge/modules/<name>`, imported in `edge/cmd/ingressd-edge/main.go`, added to `scripts/check-edge-modules.sh`. Module IDs use the `ingressd_` or `edge_` prefix as in DESIGN.md.
 - **Shared runtime state for Caddy modules:** pass it in the rendered Caddy JSON (module config), not via files.
-- **Managed mode:** panel messages are handled in `internal/nodeagent/agent.go` (`dispatch`); new protocol fields go into `pkg/nodeproto` additively. Smart DNS reports through the small interfaces in `internal/nodeagent/hooks.go`, registered with `nodeagent.SetSmartDNS(v)`.
+- **Managed mode:** panel messages are handled in `internal/nodeagent/agent.go` (`dispatch`); new protocol fields go into `pkg/nodeproto` additively. Exit routing (`smartdns`) reports through the small interfaces in `internal/nodeagent/hooks.go`, registered with `nodeagent.SetSmartDNS(v)`.
 - **Machine endpoints:** `/.ingressd/` (connector enrolment/poll/report/discovery, WireGuard-over-WebSocket) are served on `edge.admin.hostname` and, once a node has enrolled, on its own hostname or bare public IP (`render.Options.MachineHost`; a bare IP gets a certificate from Caddy's internal CA, which the connector join string pins).
 
 ## Conventions

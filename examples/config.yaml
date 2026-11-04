@@ -301,10 +301,10 @@ mesh:
       endpoint: ams1.example.net:51900
       address: 10.255.0.2/32
 
-# Smart DNS: the resolver and SNI relay listen on the tunnels' transit
-# addresses (default) so the homes can forward service domains here. Names
-# are resolved at the service's exit and answered with this node's transit
-# address; the relay forwards the streams over the mesh to the exit node.
+# Exit routing: the resolver and SNI relay listen on the tunnels' transit
+# addresses (default) so origins can forward chosen domains here. Names are
+# resolved at the service's exit and answered with this node's transit
+# address; the relay forwards the connections over the mesh to the exit node.
 smartdns:
   enabled: true
   # listen: [10.100.1.1]              # default: every tunnel's edge transit address
