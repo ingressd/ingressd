@@ -30,18 +30,6 @@ on:
         required: false
       REGISTRY_PASSWORD:
         required: false
-      # The sign and panel jobs read these from their environments
-      # (release-signing, release-publish), whose secrets take precedence.
-      # ci.yml passes the repository-level copies as a fallback while the
-      # repository is private (see the comment there).
-      MINISIGN_SECRET_KEY:
-        required: false
-      PANEL_HOST_SSH_KEY:
-        required: false
-      PANEL_HOST:
-        required: false
-      PANEL_HOST_KNOWN_HOSTS:
-        required: false
   workflow_dispatch:
 
 permissions: {}
