@@ -12,7 +12,7 @@
 # Build: docker build -f Dockerfile.connector -t ingressd-connector .
 #        (multi-arch: docker buildx build --platform linux/amd64,linux/arm64 ...)
 
-ARG GO_VERSION=1.26
+ARG GO_VERSION=1.27
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS build
 ARG TARGETOS TARGETARCH TARGETVARIANT

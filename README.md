@@ -40,7 +40,7 @@ A self-hosted edge for the home lab: WireGuard tunnels from a public cloud VM ba
 
 ## Build
 
-Requires Go 1.25+ on Linux (the edge build and netns tests are Linux-only; the control plane and connector build anywhere).
+Requires Go 1.27+ on Linux (the edge build and netns tests are Linux-only; the control plane and connector build anywhere).
 
 ```bash
 make tidy                 # first run: resolves and pins all dependencies
