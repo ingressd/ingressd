@@ -210,6 +210,20 @@ type TunnelStatus struct {
 	ConnectorOS      string                `json:"connector_os,omitempty"`
 	ConnectorArch    string                `json:"connector_arch,omitempty"`
 	ConnectorUpdate  *ConnectorUpdateState `json:"connector_update,omitempty"`
+	// ConnectorEdges is the connector's last report of every edge of the
+	// site (connector sites, additive), so RTTs to all nodes can be read
+	// from any one of them.
+	ConnectorEdges []ConnectorEdge `json:"connector_edges,omitempty"`
+}
+
+// ConnectorEdge is one edge as a connector reported it. RTTMillis is the
+// connector's smoothed round trip through the tunnel (0 = not measured).
+type ConnectorEdge struct {
+	Node          string  `json:"node,omitempty"`
+	EdgePublicKey string  `json:"edge_public_key,omitempty"`
+	RTTMillis     float64 `json:"rtt_ms,omitempty"`
+	Up            bool    `json:"up"`
+	Transport     string  `json:"transport,omitempty"`
 }
 
 // Certificate states.
