@@ -117,9 +117,8 @@ func fakeUpstream(t *testing.T, answerIP string) string {
 // exit on the host's own route.
 func testPlan(upstream string) Plan {
 	return Plan{
-		Site:       "home",
-		ForwardAll: true,
-		Upstream:   []string{upstream},
+		Site:     "home",
+		Upstream: []string{upstream},
 		Exits: map[string]PlanExit{
 			"nl":   {Node: "nod_nl", Country: "NL"},
 			"home": {Country: "GB", Egress: &EgressOptions{DNS: []string{upstream}}},
@@ -213,23 +212,6 @@ func TestNonServiceGoesUpstream(t *testing.T) {
 	}
 	if rec := m.RecentLookups(1); rec[0].Routed {
 		t.Errorf("recent %+v", rec)
-	}
-}
-
-func TestNonServiceRefusedWithoutForwardAll(t *testing.T) {
-	m, fx := newTestManager(t, fakeUpstream(t, "203.0.113.5"))
-	p := testPlan(fakeUpstream(t, "203.0.113.5"))
-	p.ForwardAll = false
-	m.Reconfigure(p)
-	if r := query(m, "www.bbc.co.uk", dns.TypeA); r.Rcode != dns.RcodeRefused || len(r.Answer) != 0 {
-		t.Fatalf("answer %v", r)
-	}
-	if res := m.recent.list(1)[0].Result; !strings.Contains(res, "not a service name") {
-		t.Errorf("result %q", res)
-	}
-	// Service names are still answered.
-	if r := query(m, "tv.stream.example", dns.TypeA); r.Rcode != dns.RcodeSuccess || fx.resolves != 1 {
-		t.Errorf("service name: %v (resolves %d)", r, fx.resolves)
 	}
 }
 

@@ -48,7 +48,7 @@ and the edge is no longer in the path of a connector exit at all.
 A new connector component (`internal/connector/client/smartdns`, built on the shared engine in §6) runs when the site's config carries a `smartdns` block:
 
 - **Listen address**: one LAN IPv4 address of the connector host (`smartdns.listen`, chosen in the panel from the addresses the connector reports, default: the address of the interface holding the default route). It binds UDP+TCP 53, TCP 80 and TCP 443 on that address only.
-- **Resolver**: a service name is answered with the listen address (TTL 300 s: the address never changes when exits or edges fail over, so a long TTL is safe). AAAA and HTTPS records for service names are suppressed as today. Other names are refused by default (the router sends only service domains, §4); `smartdns.forward_all: true` makes the connector a full resolver that forwards other names to `upstream`.
+- **Resolver**: a service name is answered with the listen address (TTL 300 s: the address never changes when exits or edges fail over, so a long TTL is safe). AAAA and HTTPS records for service names are suppressed as today. Every other name is forwarded to `upstream` (default 1.1.1.1, 9.9.9.9), so the connector can be a home's only DNS server.
 - **Relay**: reads SNI (443) or Host (80), matches the service and connects through the service's active exit. Flows stick to the exit they started on; a connection is retried on the next exit only before any client byte was sent (as today). Only private sources are served (`allowedClient`).
 - **Exits**: a connector exit is a wireguard-go device on a gVisor netstack, separate from the edge link, one per VPN config. No root, no interface, no routing table on the host, so it works the same on Linux, Windows, macOS and Docker, and can never capture host traffic. DNS for service names is resolved inside the VPN (the file's `DNS =` servers, else `upstream` through the tunnel), dials go through the netstack. Endpoint re-resolution every 30 s, keepalive 25 s and MTU follow §7.1 of ARCHITECTURE.md.
 - **Health**: a connector exit is up when its handshake is fresher than 3 minutes **and** an active probe (TCP connect through the tunnel to the trace host, every 20 s; 3 failures = down) succeeds, so a silently dead provider is seen within a minute instead of three. Country comes from the trace fetched through the exit every 10 minutes and from edge location checks, as today.
@@ -87,7 +87,7 @@ A typical failover pair is one VPN exit on the connector and the user's own VPS 
 ## 4. Home setup
 
 - **Recommended**: conditional forwarding on the router for the service domains only (UniFi, OpenWrt/dnsmasq, Pi-hole, AdGuard Home): `server=/bbc.co.uk/192.168.1.5`. A dead connector box then breaks only the routed services, not the household's DNS. The panel shows the exact lines for common routers, generated from the site's services.
-- **Without conditional forwarding**: point clients or the router's DHCP DNS at the connector with `forward_all: true`. The panel warns that the connector then carries all DNS.
+- **Without conditional forwarding**: point clients or the router's DHCP DNS at the connector; names no service routes go to the upstream resolvers. The connector then carries all DNS, so a dead connector box takes the household's DNS with it.
 - **Port conflicts**: the listen address must have 53, 80 and 443 free. Hosts that already serve on 80/443 (a NAS UI, a reverse proxy) need a second address for the connector: a secondary IP on Linux, a macvlan network for Docker (documented `docker run` / compose example). The connector reports bind failures per port in its health and the panel shows them with the fix.
 - Clients must not use their own DNS (Chrome secure DNS, Android Private DNS, hard-coded 8.8.8.8 on some TVs); the setup page says so. Not fixable by the product.
 
@@ -104,7 +104,6 @@ The site's Smart DNS config travels with the connector's tunnel config but is op
 ```json
 {
   "listen": "192.168.1.5",
-  "forward_all": false,
   "upstream": ["1.1.1.1", "9.9.9.9"],
   "failback_after": "5m",
   "services": { "npo": { "domains": ["npo.nl", "npostart.nl"], "exits": ["nl-vps", "nl-vpn"] } },
@@ -171,7 +170,7 @@ Connector:
 - Unit (`engine`): everything EXIT-FAILOVER §10 lists (order, stickiness, failback, flapping, all down, retry rules, cache per exit), now against connector and node exits behind one interface.
 - Connector: netstack exit dialing through a fake provider (wireguard-go peer in-process), probe-based down detection, bind errors reported, signed-blob rejection (wrong org key, wrong site, tampered), VPN ciphertext for another recipient refused.
 - Node: tunnel exit API refuses tunnels not in `sites` and non-site sources, never dials private or mesh addresses; country mismatch marks the exit down; no `ix-x-*` interface or 1900+ rule is ever created; nft goldens for 51901/51902.
-- netns `connector-smartdns-e2e.sh`: a LAN client, a connector (TUN mode), an edge node that is the site's node exit, a simulated provider for the connector's VPN exit and a fake CDN. Checks: service names answered with the listen address, AAAA suppressed, other names refused; HTTPS and HTTP leave from the node's IP, resolved at the node; tampered, foreign-key and replayed configs refused while the config in effect keeps working; removing the node exit fails over to the VPN within the health poll; with the provider gone too, SERVFAIL and nothing relayed; no config turns Smart DNS off.
+- netns `connector-smartdns-e2e.sh`: a LAN client, a connector (TUN mode), an edge node that is the site's node exit, a simulated provider for the connector's VPN exit and a fake CDN. Checks: service names answered with the listen address, AAAA suppressed, other names answered by the upstream resolver; HTTPS and HTTP leave from the node's IP, resolved at the node; tampered, foreign-key and replayed configs refused while the config in effect keeps working; removing the node exit fails over to the VPN within the health poll; with the provider gone too, SERVFAIL and nothing relayed; no config turns Smart DNS off.
 - Throughput: `test/perf` relay benchmark (iperf through LAN → connector → netstack VPN) on a Raspberry Pi 4–class box; target several 4K streams (≥ 100 Mbit/s) before launch.
 
 ## 8. Open questions

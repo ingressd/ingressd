@@ -63,10 +63,9 @@ type SmartDNSSite struct {
 	// and relay (80, 443) bind; empty: the address of the interface
 	// holding the default route.
 	Listen string `json:"listen,omitempty"`
-	// ForwardAll makes the connector a full resolver: names no service
-	// routes are forwarded to Upstream instead of refused.
-	ForwardAll bool     `json:"forward_all,omitempty"`
-	Upstream   []string `json:"upstream,omitempty"`
+	// Upstream answers every name no service routes (default 1.1.1.1,
+	// 9.9.9.9), so the connector can be a home's only DNS server.
+	Upstream []string `json:"upstream,omitempty"`
 	// FailbackAfter is how long a service's preferred exit must stay
 	// healthy before connections move back to it (Go duration, default
 	// 5m, at most 1h).

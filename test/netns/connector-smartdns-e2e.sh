@@ -159,6 +159,7 @@ site_json() {
 import json, sys
 print(json.dumps({
     "listen": "192.168.0.1",
+    "upstream": ["192.0.2.53"],
     "failback_after": "0s",
     "services": {"tv": {"domains": ["stream.example"], "exits": json.loads(sys.argv[1])}},
     "exits": {
@@ -185,7 +186,7 @@ wait_for "VPN exit is up" "nl-vpn VPN on this connector true" 60 sdstatus
 # --- routing through the node exit ---
 wait_for "service names resolve to the connector" "NOERROR 192.168.0.1" 20 in_lan "$SD" query 192.168.0.1:53 tv.stream.example A
 expect "AAAA for service names is suppressed" "NOERROR " in_lan "$SD" query 192.168.0.1:53 tv.stream.example AAAA
-expect "names no service routes are refused" "REFUSED" in_lan "$SD" query 192.168.0.1:53 other.example A
+expect "other names are answered by the upstream resolver" "NOERROR 192.0.2.10" in_lan "$SD" query 192.168.0.1:53 other.example A
 CURL=(in_lan curl -sk --max-time 8)
 wait_for "HTTPS leaves from the node's own IP" "edge=192.0.2.20 src=198.51.100.1" 20 \
 	"${CURL[@]}" --resolve tv.stream.example:443:192.168.0.1 https://tv.stream.example/

@@ -248,7 +248,6 @@ func (c *sdController) update() {
 func (c *sdController) planLocked(st *State, env nodeproto.SignedSmartDNS) (smartdns.Plan, string, error) {
 	var site config.SmartDNSSite
 	dec := json.NewDecoder(bytes.NewReader(env.Config))
-	dec.DisallowUnknownFields()
 	if err := dec.Decode(&site); err != nil {
 		return smartdns.Plan{}, "", fmt.Errorf("smart DNS config: %w", err)
 	}
@@ -265,7 +264,7 @@ func (c *sdController) planLocked(st *State, env nodeproto.SignedSmartDNS) (smar
 		listen = a
 	}
 	plan := smartdns.Plan{
-		Site: st.Tunnel(), Listen: []netip.Addr{listen}, ForwardAll: site.ForwardAll, Upstream: site.Upstream,
+		Site: st.Tunnel(), Listen: []netip.Addr{listen}, Upstream: site.Upstream,
 		FailbackAfter: site.FailbackDuration(), Services: site.Services, Exits: map[string]smartdns.PlanExit{}, Checks: site.Checks,
 	}
 	keep := map[string]bool{}

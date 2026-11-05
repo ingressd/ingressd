@@ -45,9 +45,7 @@ type Plan struct {
 	Site string
 	// Listen are the addresses the resolver and relay bind.
 	Listen []netip.Addr
-	// ForwardAll forwards names no service routes to Upstream; otherwise
-	// they are refused.
-	ForwardAll    bool
+	// Upstream answers every name no service routes.
 	Upstream      []string
 	FailbackAfter time.Duration
 	Services      map[string]config.SmartDNSSiteService

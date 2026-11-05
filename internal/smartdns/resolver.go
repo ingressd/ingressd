@@ -134,10 +134,6 @@ func (m *Manager) answer(localAddr, remoteAddr net.Addr, req *dns.Msg) *dns.Msg 
 	defer cancel()
 	r, routed := st.match.match(name)
 	if !routed {
-		if !st.plan.ForwardAll {
-			entry.Result = "refused (not a service name)"
-			return reply(req, dns.RcodeRefused)
-		}
 		resp, err := m.forward(ctx, st, req)
 		if err != nil {
 			entry.Result = "SERVFAIL (upstream: " + err.Error() + ")"
