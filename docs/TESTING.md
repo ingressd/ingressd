@@ -173,7 +173,7 @@ times concurrently: `E2E_REPEAT=8 scripts/e2e.sh <suite>`.
 
 ```
 # <glob>                 <suite>... | all | none   (first match wins)
-internal/smartdns/*      connector-join managed-node
+internal/smartdns/*      connector-smartdns
 docs/*                   none
 ```
 

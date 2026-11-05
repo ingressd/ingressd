@@ -3,6 +3,7 @@
 package client
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/hex"
@@ -21,6 +22,7 @@ import (
 	"golang.zx2c4.com/wireguard/tun/netstack"
 
 	"github.com/ingressd/ingressd/internal/smartdns/wgconf"
+	"github.com/ingressd/ingressd/pkg/envcompat"
 )
 
 // A connector VPN exit: the provider's WireGuard config on its own
@@ -38,8 +40,9 @@ const (
 )
 
 // vpnProbeTarget is dialled through the tunnel to tell a dead provider
-// from an idle one before the handshake ages out.
-var vpnProbeTarget = "1.1.1.1:443"
+// from an idle one before the handshake ages out
+// ( overrides it, for test networks).
+var vpnProbeTarget = cmp.Or(strings.TrimSpace(envcompat.Get("INGRESSD_SMARTDNS_PROBE_ADDR")), "1.1.1.1:443")
 
 type vpnExit struct {
 	name     string

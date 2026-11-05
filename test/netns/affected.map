@@ -62,19 +62,20 @@ test/netns/remote-updates-e2e.sh         remote-updates
 test/netns/realms-e2e.sh                 realms
 test/netns/realms-shaping-e2e.sh         realms-shaping
 test/netns/pop-forward-e2e.sh            pop-forward
+test/netns/connector-smartdns-e2e.sh     connector-smartdns
 
 # --- Test helpers ---------------------------------------------------------------
-test/netns/sdtool/*               none
+test/netns/sdtool/*               connector-smartdns
 test/netns/realmtool/*            realms
 test/fakepanel/*                  managed-node remote-updates
 scripts/releasetool/*             remote-updates
 
 # --- Feature packages (the suites that exercise them) ---------------------------
-internal/smartdns/*               connector-join managed-node
+internal/smartdns/*               connector-smartdns
 internal/mesh/*                   pop-forward
 internal/l4/*                     l4-forwarding managed-node
-internal/connector/*              connector-transports connector-join multi-edge managed-node remote-updates
-cmd/ingressd-connector/*          connector-transports connector-join multi-edge remote-updates
+internal/connector/*              connector-transports connector-join multi-edge managed-node remote-updates connector-smartdns
+cmd/ingressd-connector/*          connector-transports connector-join multi-edge remote-updates connector-smartdns
 deploy/install-connector.sh       connector-join
 deploy/*                          none
 internal/nodeagent/*              managed-node multi-edge remote-updates

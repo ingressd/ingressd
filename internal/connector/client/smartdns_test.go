@@ -111,8 +111,8 @@ func TestSmartDNSConfigTrust(t *testing.T) {
 	tampered = bytes.Replace(tampered, []byte("npo.nl"), []byte("bank.example"), 1)
 	setBlob(s, tampered)
 	c.update()
-	if r := c.report(); !strings.Contains(r.Error, "bad org signature") {
-		t.Errorf("tampered: %+v", r)
+	if r := c.report(); !strings.Contains(r.Error, "bad org signature") || r.Listen != "127.0.0.1" || len(r.Services) != 1 {
+		t.Errorf("tampered config must leave the config in effect running: %+v", r)
 	}
 	setBlob(s, signedSite(t, key, "someone-else", t0.Add(time.Minute), nodeExitSite()))
 	c.update()

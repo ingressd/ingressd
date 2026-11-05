@@ -1,6 +1,6 @@
 # Smart DNS on the connector
 
-Status: node and connector implemented (2026-11-05); panel in progress; exit attachments (§5.3) and the netns suite (§7) not built yet. Replaces the edge-side Smart DNS of [ARCHITECTURE.md §7](ARCHITECTURE.md#7-exit-routing-smartdns-in-rev1) and §11 (per-realm Smart DNS), and moves the home side of [EXIT-FAILOVER.md](EXIT-FAILOVER.md) into the connector. The product has not launched, so the edge-side home resolver and relay are removed rather than kept for compatibility.
+Status: node and connector implemented (2026-11-05); panel in progress; exit attachments (§5.3) not built yet; the netns suite (§7) is written but has not run on a Linux host yet. Replaces the edge-side Smart DNS of [ARCHITECTURE.md §7](ARCHITECTURE.md#7-exit-routing-smartdns-in-rev1) and §11 (per-realm Smart DNS), and moves the home side of [EXIT-FAILOVER.md](EXIT-FAILOVER.md) into the connector. The product has not launched, so the edge-side home resolver and relay are removed rather than kept for compatibility.
 
 ---
 
@@ -171,7 +171,7 @@ Connector:
 - Unit (`engine`): everything EXIT-FAILOVER §10 lists (order, stickiness, failback, flapping, all down, retry rules, cache per exit), now against connector and node exits behind one interface.
 - Connector: netstack exit dialing through a fake provider (wireguard-go peer in-process), probe-based down detection, bind errors reported, signed-blob rejection (wrong org key, wrong site, tampered), VPN ciphertext for another recipient refused.
 - Node: tunnel exit API refuses tunnels not in `sites` and non-site sources, never dials private or mesh addresses; country mismatch marks the exit down; no `ix-x-*` interface or 1900+ rule is ever created; nft goldens for 51901/51902.
-- netns `connector-smartdns-e2e.sh`: a LAN client, a connector, two edges (one of them an exit node), and a simulated provider for a connector VPN exit. Checks: service names answered with the listen address; streams leave from the exit node's IP; exit node killed → connector VPN exit within 5 s; provider killed while the node is preferred → nothing changes; both edges killed → connector exit keeps working; exit node killed while the connector exit is down → SERVFAIL, nothing leaked; a tampered blob relayed by an edge is refused.
+- netns `connector-smartdns-e2e.sh`: a LAN client, a connector (TUN mode), an edge node that is the site's node exit, a simulated provider for the connector's VPN exit and a fake CDN. Checks: service names answered with the listen address, AAAA suppressed, other names refused; HTTPS and HTTP leave from the node's IP, resolved at the node; tampered, foreign-key and replayed configs refused while the config in effect keeps working; removing the node exit fails over to the VPN within the health poll; with the provider gone too, SERVFAIL and nothing relayed; no config turns Smart DNS off.
 - Throughput: `test/perf` relay benchmark (iperf through LAN → connector → netstack VPN) on a Raspberry Pi 4–class box; target several 4K streams (≥ 100 Mbit/s) before launch.
 
 ## 8. Open questions

@@ -36,7 +36,8 @@ var TransparentSources func(cfg *config.Config, tunnel string) []string
 var DefaultHost func() string
 
 // DefaultNodeID, if set, returns the node's panel id (managed nodes), sent
-// to connectors so they can name this edge as a Smart DNS exit.
+// to connectors so they can name this edge as a Smart DNS exit; standalone
+// nodes send edge.name instead.
 var DefaultNodeID func() string
 
 // TunnelConfig builds the connector-facing config for a tunnel.
@@ -63,7 +64,7 @@ func TunnelConfig(cfg *config.Config, keys EdgeKeys, name string) (proto.TunnelC
 	}
 	tc := proto.TunnelConfig{
 		Tunnel:        name,
-		Node:          nodeID(),
+		Node:          cmp.Or(nodeID(), cfg.Edge.Name),
 		EdgePublicKey: pub,
 		Endpoint:      net.JoinHostPort(host, strconv.Itoa(t.ListenPort)),
 		Address:       netip.PrefixFrom(render.SiteAddr(transit), transit.Bits()).String(),

@@ -194,6 +194,12 @@ func (c *sdController) update() {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if best == nil && len(refused) > 0 {
+		// A config that does not verify never replaces or stops the one in
+		// effect: otherwise an edge could turn Smart DNS off.
+		c.errMsg = strings.Join(refused, "; ")
+		return
+	}
 	if best == nil {
 		if c.applied != "" {
 			c.log.Info("smart DNS turned off (no edge carries a config)")
@@ -204,6 +210,7 @@ func (c *sdController) update() {
 		return
 	}
 	if best.env.Signature == c.applied {
+		c.errMsg = strings.Join(refused, "; ")
 		return
 	}
 	if best.env.Issued.Before(st.SmartDNSIssued) {

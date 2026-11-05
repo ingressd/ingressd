@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// Command sdtool is a test helper for test/netns/smartdns-e2e.sh: a DNS
-// query client, a fake CDN resolver that answers by source address, a fake
-// CDN HTTPS/HTTP server that reports who connected, and a test CA.
+// Command sdtool is a test helper for test/netns/connector-smartdns-e2e.sh: a
+// DNS query client, a fake CDN resolver that answers by source address, a
+// fake CDN HTTPS/HTTP server that reports who connected, a test CA, and
+// the panel's part: signing a site config and sealing a VPN config to a
+// connector.
 package main
 
 import (
@@ -30,7 +32,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		log.Fatal("usage: sdtool query|fakedns|cdn|gencert ...")
+		log.Fatal("usage: sdtool query|fakedns|cdn|gencert|connkey|seal|sign ...")
 	}
 	switch os.Args[1] {
 	case "query":
@@ -41,6 +43,12 @@ func main() {
 		cdn(os.Args[2:])
 	case "gencert":
 		gencert(os.Args[2:])
+	case "connkey":
+		connKey(os.Args[2:])
+	case "seal":
+		seal(os.Args[2:])
+	case "sign":
+		sign(os.Args[2:])
 	default:
 		log.Fatalf("unknown command %s", os.Args[1])
 	}
