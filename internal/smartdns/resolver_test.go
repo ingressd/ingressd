@@ -4,6 +4,7 @@ package smartdns
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"errors"
 	"io"
@@ -31,17 +32,29 @@ type fakeExits struct {
 	resolves int
 	markDown int
 	connect  func(req ConnectRequest) (net.Conn, error)
+
+	// Per node and per exit behaviour for failover tests (nil: unused).
+	downNodes   map[string]bool         // unreachable over the mesh; MarkDown adds to it
+	brokenNodes map[string]bool         // transport fails while the mesh probe still says up
+	downExits   map[string]bool         // the exit node reports these exits down
+	exitAddrs   map[string][]netip.Addr // what each exit resolves names to
+	resolved    []string                // exit of every Resolve call
+	health      func(node string) (map[string]exitState, error)
 }
 
 func (f *fakeExits) Resolve(_ context.Context, node, exit, name string) (resolveResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.resolves++
-	if f.resErr != nil {
-		return resolveResponse{}, f.resErr
+	f.resolved = append(f.resolved, exit)
+	if f.resErr != nil || f.downNodes[node] || f.brokenNodes[node] {
+		return resolveResponse{}, cmp.Or(f.resErr, errors.New("no route to host"))
 	}
-	if f.exitDown {
+	if f.exitDown || f.downExits[exit] {
 		return resolveResponse{Error: "vpn down"}, nil
+	}
+	if a, ok := f.exitAddrs[exit]; ok {
+		return resolveResponse{ExitUp: true, Addrs: a, TTL: 60}, nil
 	}
 	if f.exitErr != "" {
 		return resolveResponse{ExitUp: true, Error: f.exitErr}, nil
@@ -53,17 +66,34 @@ func (f *fakeExits) Connect(_ context.Context, node string, req ConnectRequest) 
 	return f.connect(req)
 }
 
-func (f *fakeExits) Up(string) bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.up
+func (f *fakeExits) Health(_ context.Context, node string) (map[string]exitState, error) {
+	if f.health == nil {
+		return nil, errHealthUnsupported
+	}
+	return f.health(node)
 }
 
-func (f *fakeExits) MarkDown(string, error) {
+func (f *fakeExits) Up(node string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.up && !f.downNodes[node]
+}
+
+func (f *fakeExits) MarkDown(node string, _ error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.markDown++
-	f.up = false
+	if f.downNodes != nil {
+		f.downNodes[node] = true
+	} else {
+		f.up = false
+	}
+}
+
+func (f *fakeExits) set(fn func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fn()
 }
 
 // fakeUpstream is a DNS server on 127.0.0.1 answering every A query with

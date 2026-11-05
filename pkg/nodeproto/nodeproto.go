@@ -174,9 +174,12 @@ type Status struct {
 	Tunnels         []TunnelStatus `json:"tunnels,omitempty"`
 	Certs           []CertStatus   `json:"certs,omitempty"`
 	Exits           []ExitStatus   `json:"exits,omitempty"` // smart DNS exits hosted on this node
-	Mesh            []MeshPeer     `json:"mesh,omitempty"`
-	DiskFreeBytes   int64          `json:"disk_free_bytes,omitempty"`
-	Uptime          int64          `json:"uptime_seconds,omitempty"`
+	// SmartDNSServices are the smart DNS services this node relays and the
+	// exit each uses now (additive).
+	SmartDNSServices []ServiceStatus `json:"smartdns_services,omitempty"`
+	Mesh             []MeshPeer      `json:"mesh,omitempty"`
+	DiskFreeBytes    int64           `json:"disk_free_bytes,omitempty"`
+	Uptime           int64           `json:"uptime_seconds,omitempty"`
 }
 
 type Check struct {
@@ -236,6 +239,18 @@ type ExitStatus struct {
 	// after resolving the config's host name), additive.
 	Endpoint string `json:"endpoint,omitempty"`
 	Message  string `json:"message,omitempty"`
+}
+
+// ServiceStatus is a smart DNS service's exit choice on one home node.
+type ServiceStatus struct {
+	Name  string   `json:"name"`
+	Exits []string `json:"exits"` // in order of preference
+	// Active is the exit new connections use, empty while every exit is
+	// down; Failover is true when it is not Exits[0].
+	Active   string    `json:"active,omitempty"`
+	Failover bool      `json:"failover,omitempty"`
+	Since    time.Time `json:"since,omitempty"` // when Active was chosen
+	Message  string    `json:"message,omitempty"`
 }
 
 type MeshPeer struct {

@@ -41,6 +41,10 @@ type ConnectResponse struct {
 	OK    bool   `json:"ok"`
 	Addr  string `json:"addr,omitempty"` // upstream address connected to
 	Error string `json:"error,omitempty"`
+	// ExitDown marks a refusal because the exit cannot egress, which the
+	// home node may retry through the service's next exit; any other
+	// refusal is final. Older exit nodes never set it.
+	ExitDown bool `json:"exit_down,omitempty"`
 }
 
 func writeFrame(w io.Writer, magic bool, v any) error {

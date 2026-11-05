@@ -113,6 +113,19 @@ func newSmartDNSCmd(e *env) *cobra.Command {
 			for _, x := range s.RemoteExits {
 				fmt.Fprintf(tw, "%s\t%s\t%v\t%s\t%s\n", x.Name, x.Node, x.Up, x.Country, x.Message)
 			}
+			if len(s.Services) > 0 {
+				fmt.Fprintln(tw, "\nSERVICE\tEXITS\tACTIVE\tSINCE\tMESSAGE")
+				for _, sv := range s.Services {
+					active, since := sv.Active, "-"
+					if active == "" {
+						active = "none (fail closed)"
+					}
+					if !sv.Since.IsZero() {
+						since = sv.Since.Local().Format("15:04:05")
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", sv.Name, strings.Join(sv.Exits, ","), active, since, sv.Message)
+				}
+			}
 			fmt.Fprintln(tw, "\nSERVICE\tBYTES\tCONNECTIONS")
 			for _, u := range s.Usage {
 				fmt.Fprintf(tw, "%s\t%d\t%d\n", u.Service, u.Bytes, u.Conns)

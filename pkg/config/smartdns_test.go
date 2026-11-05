@@ -54,7 +54,7 @@ func TestSmartDNSValidation(t *testing.T) {
 	for _, tc := range []struct {
 		name, old, new, want string
 	}{
-		{"unknown exit", "exit: nl, catalog", "exit: de, catalog", `smartdns.services.streamtv.exit: unknown exit "de"`},
+		{"unknown exit", "exit: nl, catalog", "exit: de, catalog", `smartdns.services.streamtv.exits[0]: unknown exit "de"`},
 		{"unknown peer", "node: nod_nl, country", "node: nod_de, country", `smartdns.exits.nl.node: unknown mesh peer "nod_de"`},
 		{"bad country", "country: nl", "country: Netherlands", "smartdns.exits.nl.country"},
 		{"bad vpn ref", `vpn: "secret://proton-gb"`, `vpn: "/etc/proton.conf"`, "smartdns.exits.here.vpn: must be a secret reference"},
@@ -143,5 +143,89 @@ func TestVPNInterfaceNameLongExits(t *testing.T) {
 	}
 	if v := c.VPNExits(); len(v) != 3 {
 		t.Errorf("vpn exits %v", v)
+	}
+}
+
+func TestSmartDNSServiceExits(t *testing.T) {
+	const exits = "    nl: { node: nod_nl, country: nl }\n"
+	more := exits + "    nl2: { node: nod_nl, country: NL }\n    nl3: { node: self, country: NL }\n    nl4: { node: self, country: NL }\n    nl5: { node: self, country: NL }\n"
+	for _, tc := range []struct {
+		name, svc, want string
+	}{
+		{"list", "exits: [nl, nl2, nl3]", ""},
+		{"both", "exit: nl, exits: [nl2]", "smartdns.services.streamtv: set exit or exits, not both"},
+		{"both same", "exit: nl, exits: [nl]", "set exit or exits, not both"},
+		{"none", "enabled: true", "smartdns.services.streamtv.exits: is required"},
+		{"empty list", "exits: []", "smartdns.services.streamtv.exits: is required"},
+		{"too many", "exits: [nl, nl2, nl3, nl4, nl5]", "smartdns.services.streamtv.exits: at most 4 exits, got 5"},
+		{"duplicate", "exits: [nl, nl2, nl]", `smartdns.services.streamtv.exits[2]: duplicate exit "nl"`},
+		{"unknown", "exits: [nl, de]", `smartdns.services.streamtv.exits[1]: unknown exit "de"`},
+		{"country", "exits: [nl, here]", "smartdns.services.streamtv.exits[1]: country GB differs from NL of exits[0]"},
+	} {
+		y := strings.Replace(sdBase, exits, more, 1)
+		y = strings.Replace(y, "exit: nl, catalog", tc.svc+", catalog", 1)
+		c, err := Parse([]byte(y))
+		if err != nil {
+			t.Fatalf("%s: parse: %v", tc.name, err)
+		}
+		err = c.Validate()
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("%s: %v", tc.name, err)
+		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+			t.Errorf("%s: got %v, want %q", tc.name, err, tc.want)
+		}
+	}
+}
+
+func TestSmartDNSExitNormalised(t *testing.T) {
+	c, err := Parse([]byte(sdBase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := c.SmartDNS.Services["streamtv"]
+	if svc.Exit != "" || strings.Join(svc.Exits, ",") != "nl" {
+		t.Errorf("exit not normalised into exits: %+v", svc)
+	}
+	// A config built in code without loading still has a usable list.
+	if l := (SmartDNSService{Exit: "nl"}).ExitList(); strings.Join(l, ",") != "nl" {
+		t.Errorf("ExitList %v", l)
+	}
+	if d := c.SmartDNS.FailbackDuration(); d != DefaultSmartDNSFailbackAfter {
+		t.Errorf("failback default %s", d)
+	}
+}
+
+func TestSmartDNSFailbackBounds(t *testing.T) {
+	for _, tc := range []struct {
+		val  string
+		want string
+	}{
+		{"0s", ""},
+		{"30s", ""},
+		{"1h", ""},
+		{"61m", "smartdns.failback_after: must be between 0s and 1h0m0s"},
+		{"-1s", "smartdns.failback_after"},
+	} {
+		y := strings.Replace(sdBase, "  enabled: true\n", "  enabled: true\n  failback_after: "+tc.val+"\n", 1)
+		c, err := Parse([]byte(y))
+		if err != nil {
+			t.Fatalf("%s: parse: %v", tc.val, err)
+		}
+		err = c.Validate()
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("%s: %v", tc.val, err)
+		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+			t.Errorf("%s: got %v, want %q", tc.val, err, tc.want)
+		}
+		if tc.want == "" && c.SmartDNS.FailbackAfter == nil {
+			t.Errorf("%s: not parsed", tc.val)
+		}
+	}
+	y := strings.Replace(sdBase, "  enabled: true\n", "  enabled: true\n  failback_after: 0s\n", 1)
+	c, _ := Parse([]byte(y))
+	if d := c.SmartDNS.FailbackDuration(); d != 0 {
+		t.Errorf("failback 0s gave %s", d)
 	}
 }
