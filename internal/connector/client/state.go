@@ -57,6 +57,8 @@ type State struct {
 	// SmartDNSConfig is that config (nodeproto.SignedSmartDNS), run at start
 	// whatever the edges say, so Smart DNS never depends on an edge.
 	SmartDNSConfig json.RawMessage `json:"smartdns_config,omitempty"`
+	// RescueIssued is the newest edge list accepted from the panel (rescue.go).
+	RescueIssued time.Time `json:"rescue_issued,omitempty"`
 }
 
 // EdgeState is one edge (node) of the site.

@@ -126,6 +126,10 @@ type session struct {
 	mtuMu  sync.Mutex
 	udpMTU int // probed path MTU over UDP (TUN mode), 0 = not yet
 
+	// isolated is when the last tunnel went down, rescued the last time the
+	// panel was asked for edges (rescue.go). Guarded by mu.
+	isolated, rescued time.Time
+
 	statusMu sync.Mutex // serialises status file writes
 }
 
@@ -209,6 +213,7 @@ func (s *session) manage(ctx context.Context) {
 		case <-tick.C:
 			s.updateOwner()
 			s.applyMTU()
+			s.rescueTick(ctx, time.Now())
 			s.writeStatus()
 			s.upd.tick(s.healthy())
 		case <-refresh.C:

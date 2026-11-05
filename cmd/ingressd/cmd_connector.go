@@ -43,6 +43,12 @@ var (
 func connectorServer(e *env) *connector.Server {
 	connOnce.Do(func() {
 		connector.DefaultHost = e.machineHost
+		connector.DefaultPanelURL = func() string {
+			if st, err := nodeagent.LoadState(e.stateDir); err == nil {
+				return st.PanelURL
+			}
+			return ""
+		}
 		connector.DefaultNodeID = func() string {
 			if st, err := nodeagent.LoadState(e.stateDir); err == nil {
 				return st.NodeID

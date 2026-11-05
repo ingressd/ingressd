@@ -70,7 +70,10 @@ type EnrollResponse struct {
 type TunnelConfig struct {
 	Tunnel string `json:"tunnel"`
 	// Node is the edge's own node id (managed nodes; additive).
-	Node          string `json:"node,omitempty"`
+	Node string `json:"node,omitempty"`
+	// PanelURL is where a connector that lost every edge asks for its
+	// site's current ones (managed nodes; additive).
+	PanelURL      string `json:"panel_url,omitempty"`
 	EdgePublicKey string `json:"edge_public_key"`
 	// Endpoint is the edge's WireGuard UDP listener, host:port.
 	Endpoint string `json:"endpoint"`

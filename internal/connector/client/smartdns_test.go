@@ -285,3 +285,62 @@ func TestSmartDNSConfigSurvivesRestartFromDisk(t *testing.T) {
 		t.Fatalf("after a restart with the edge gone: %+v", r)
 	}
 }
+
+func TestRescueAddsEdgesAndChecksTheList(t *testing.T) {
+	_, s := newTestController(t)
+	s.restartEdge = map[string]bool{}
+	s.refresh = make(chan struct{}, 1)
+	_, key, _ := ed25519.GenerateKey(nil)
+	_, other, _ := ed25519.GenerateKey(nil)
+	me := s.priv.PublicKey().String()
+	nk, _ := wgtypes.GeneratePrivateKey()
+	edgeKey := nk.PublicKey().String()
+	t0 := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	list := func(k ed25519.PrivateKey, connector string, at time.Time) nodeproto.SignedEdges {
+		e := nodeproto.SignedEdges{Connector: connector, Issued: at, Edges: []nodeproto.RescueEdge{
+			{Node: "nod_new", Endpoint: "203.0.113.9:51830", EdgePublicKey: edgeKey, Transit: "100.112.0.8/30", WSURL: "wss://203.0.113.9/.ingressd/tunnel/t0"}}}
+		nodeproto.SignEdges(&e, k)
+		return e
+	}
+	if err := s.applyRescue(list(key, "someone-else", t0), me); err == nil {
+		t.Fatal("list for another connector accepted")
+	}
+	if err := s.applyRescue(list(key, me, t0), me); err != nil {
+		t.Fatal(err)
+	}
+	es := s.st.Edge(edgeKey)
+	if es == nil || es.Node != "nod_new" || !es.Learned || es.Config.Address != "100.112.0.10/30" || es.Config.EdgeAddress != "100.112.0.9" {
+		t.Fatalf("edge %+v", es)
+	}
+	if err := s.applyRescue(list(other, me, t0.Add(time.Minute)), me); err == nil {
+		t.Fatal("list from another org key accepted")
+	}
+	if err := s.applyRescue(list(key, me, t0.Add(-time.Minute)), me); err == nil {
+		t.Fatal("older list accepted")
+	}
+	tampered := list(key, me, t0.Add(time.Minute))
+	tampered.Edges[0].Endpoint = "198.51.100.66:51820"
+	if err := s.applyRescue(tampered, me); err == nil {
+		t.Fatal("tampered list accepted")
+	}
+}
+
+func TestRescueIsDueOnlyWhenIsolated(t *testing.T) {
+	_, s := newTestController(t)
+	t0 := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	if s.rescueDue(true, t0) || s.rescueDue(false, t0) || s.rescueDue(false, t0.Add(rescueAfter-time.Second)) {
+		t.Fatal("asked too early")
+	}
+	if !s.rescueDue(false, t0.Add(rescueAfter)) {
+		t.Fatal("not asked when isolated")
+	}
+	if s.rescueDue(false, t0.Add(rescueAfter+time.Second)) {
+		t.Fatal("asked again at once")
+	}
+	if !s.rescueDue(false, t0.Add(rescueAfter+rescueEvery)) {
+		t.Fatal("no retry")
+	}
+	if s.rescueDue(true, t0.Add(2*rescueAfter+rescueEvery)) || s.rescueDue(false, t0.Add(2*rescueAfter+rescueEvery+time.Second)) {
+		t.Fatal("a live tunnel must reset the clock")
+	}
+}

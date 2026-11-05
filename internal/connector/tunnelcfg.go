@@ -40,6 +40,9 @@ var DefaultHost func() string
 // nodes send edge.name instead.
 var DefaultNodeID func() string
 
+// DefaultPanelURL, if set, returns the panel managing this node.
+var DefaultPanelURL func() string
+
 // TunnelConfig builds the connector-facing config for a tunnel.
 func TunnelConfig(cfg *config.Config, keys EdgeKeys, name string) (proto.TunnelConfig, error) {
 	t, ok := cfg.Tunnels[name]
@@ -65,6 +68,7 @@ func TunnelConfig(cfg *config.Config, keys EdgeKeys, name string) (proto.TunnelC
 	tc := proto.TunnelConfig{
 		Tunnel:        name,
 		Node:          cmp.Or(nodeID(), cfg.Edge.Name),
+		PanelURL:      panelURL(),
 		EdgePublicKey: pub,
 		Endpoint:      net.JoinHostPort(host, strconv.Itoa(t.ListenPort)),
 		Address:       netip.PrefixFrom(render.SiteAddr(transit), transit.Bits()).String(),
@@ -138,6 +142,13 @@ func hostPort(addr string) string {
 		}
 	}
 	return net.JoinHostPort(u.Hostname(), port)
+}
+
+func panelURL() string {
+	if DefaultPanelURL == nil {
+		return ""
+	}
+	return DefaultPanelURL()
 }
 
 func nodeID() string {
