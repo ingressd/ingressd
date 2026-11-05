@@ -316,7 +316,7 @@ func (s *Store) Stats(ctx context.Context, q StatsQuery) (*Stats, error) {
 	}
 	step = max(step.Truncate(time.Minute), time.Minute)
 
-	cond := "minute >= ? AND minute < ?"
+	cond := "minute >= ? AND minute <= ?"
 	args := []any{q.Since.Unix() / 60 * 60, q.Until.Unix()}
 	if q.Host != "" {
 		cond += " AND host = ?"
