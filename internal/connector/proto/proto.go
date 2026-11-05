@@ -130,6 +130,20 @@ type Health struct {
 	Arch    string       `json:"arch,omitempty"`
 	Install string       `json:"install,omitempty"`
 	Update  *UpdateState `json:"update,omitempty"`
+	// Edges is the connector's view of every edge it links to, so any
+	// node of the site can report RTTs to all of them (additive).
+	Edges []EdgeReport `json:"edges,omitempty"`
+}
+
+// EdgeReport is one edge as the connector sees it. RTTMillis is an EWMA of
+// TCP connects to the edge's tunnel control port through the tunnel (0 =
+// not measured yet).
+type EdgeReport struct {
+	Node          string  `json:"node,omitempty"`
+	EdgePublicKey string  `json:"edge_public_key"`
+	RTTMillis     float64 `json:"rtt_ms,omitempty"`
+	Up            bool    `json:"up"`
+	Transport     string  `json:"transport,omitempty"`
 }
 
 // Reach is the result of one reachability test from the site.

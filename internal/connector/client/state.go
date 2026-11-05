@@ -171,6 +171,9 @@ type EdgeStatus struct {
 	TxBytes       int64     `json:"tx_bytes"`
 	LastPoll      time.Time `json:"last_poll,omitempty"`
 	PollError     string    `json:"poll_error,omitempty"`
+	RTTMillis     float64   `json:"rtt_ms,omitempty"`
+	Priority      int       `json:"priority,omitempty"`
+	PoP           string    `json:"pop,omitempty"`
 }
 
 // Up reports whether the edge has a transport and a recent handshake.
