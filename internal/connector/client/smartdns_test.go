@@ -27,13 +27,13 @@ import (
 	"github.com/ingressd/ingressd/pkg/nodeproto"
 )
 
-func signedSite(t *testing.T, key ed25519.PrivateKey, site string, issued time.Time, cfg config.SmartDNSSite) json.RawMessage {
+func signedSite(t *testing.T, key ed25519.PrivateKey, connector string, issued time.Time, cfg config.SmartDNSSite) json.RawMessage {
 	t.Helper()
 	b, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := nodeproto.SignedSmartDNS{Site: site, Issued: issued, Config: b}
+	env := nodeproto.SignedSmartDNS{Connector: connector, Issued: issued, Config: b}
 	nodeproto.SignSmartDNS(&env, key)
 	out, _ := json.Marshal(env)
 	return out
@@ -60,7 +60,7 @@ func newTestController(t *testing.T) (*sdController, *session) {
 	if err := st.Save(path); err != nil {
 		t.Fatal(err)
 	}
-	s := &session{r: &Runner{StatePath: path}, st: st, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s := &session{r: &Runner{StatePath: path}, st: st, priv: k, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	c := &sdController{statePath: path, log: s.log, vpns: map[string]*vpnExit{}, ctx: ctx}
@@ -82,10 +82,11 @@ func setBlob(s *session, raw json.RawMessage) {
 func TestSmartDNSConfigTrust(t *testing.T) {
 	c, s := newTestController(t)
 	_, key, _ := ed25519.GenerateKey(nil)
+	me := s.priv.PublicKey().String()
 	_, other, _ := ed25519.GenerateKey(nil)
 	t0 := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
 
-	setBlob(s, signedSite(t, key, "home", t0, nodeExitSite()))
+	setBlob(s, signedSite(t, key, me, t0, nodeExitSite()))
 	c.update()
 	r := c.report()
 	if r.Error != "" || r.Listen != "127.0.0.1" || !r.Issued.Equal(t0) || !strings.HasPrefix(r.AgeRecipient, "age1") {
@@ -101,27 +102,27 @@ func TestSmartDNSConfigTrust(t *testing.T) {
 
 	// Another org's key, a tampered config, another site and an older
 	// config are all refused; the config in effect stays.
-	setBlob(s, signedSite(t, other, "home", t0.Add(time.Minute), nodeExitSite()))
+	setBlob(s, signedSite(t, other, me, t0.Add(time.Minute), nodeExitSite()))
 	c.update()
 	if r := c.report(); !strings.Contains(r.Error, "another org key") || !r.Issued.Equal(t0) {
 		t.Errorf("other key: %+v", r)
 	}
-	tampered := signedSite(t, key, "home", t0.Add(time.Minute), nodeExitSite())
+	tampered := signedSite(t, key, me, t0.Add(time.Minute), nodeExitSite())
 	tampered = bytes.Replace(tampered, []byte("npo.nl"), []byte("bank.example"), 1)
 	setBlob(s, tampered)
 	c.update()
 	if r := c.report(); !strings.Contains(r.Error, "bad org signature") {
 		t.Errorf("tampered: %+v", r)
 	}
-	setBlob(s, signedSite(t, key, "away", t0.Add(time.Minute), nodeExitSite()))
+	setBlob(s, signedSite(t, key, "someone-else", t0.Add(time.Minute), nodeExitSite()))
 	c.update()
-	if r := c.report(); !strings.Contains(r.Error, `for site "away"`) {
+	if r := c.report(); !strings.Contains(r.Error, `for connector "someone-else"`) {
 		t.Errorf("other site: %+v", r)
 	}
 	c.mu.Lock()
 	c.applied = "" // as after a restart: only the persisted issue time guards
 	c.mu.Unlock()
-	setBlob(s, signedSite(t, key, "home", t0.Add(-time.Minute), nodeExitSite()))
+	setBlob(s, signedSite(t, key, me, t0.Add(-time.Minute), nodeExitSite()))
 	c.update()
 	if r := c.report(); !strings.Contains(r.Error, "older than the one in effect") {
 		t.Errorf("replay: %+v", r)
@@ -130,7 +131,7 @@ func TestSmartDNSConfigTrust(t *testing.T) {
 	// An invalid config is refused with its validation error.
 	bad := nodeExitSite()
 	bad.Exits["nl-vps"] = config.SmartDNSSiteExit{At: config.ExitAtOperator, Country: "NL"}
-	setBlob(s, signedSite(t, key, "home", t0.Add(2*time.Minute), bad))
+	setBlob(s, signedSite(t, key, me, t0.Add(2*time.Minute), bad))
 	c.update()
 	if r := c.report(); !strings.Contains(r.Error, "operator exits are not offered") {
 		t.Errorf("invalid: %+v", r)

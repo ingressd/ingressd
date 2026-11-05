@@ -22,9 +22,10 @@ const CapabilityConnectorSmartDNS = "connector-smartdns"
 // as JSON) signed by the org key. Nodes, self-hosted or shared, only pass it
 // on; the connector verifies it against the org key it pinned.
 type SignedSmartDNS struct {
-	// Site is the tunnel name the config is for; the connector refuses a
-	// config for another site.
-	Site string `json:"site"`
+	// Connector is the WireGuard public key of the site's connector (the
+	// same on every edge, whatever a node names the tunnel); the connector
+	// refuses a config for another key.
+	Connector string `json:"connector"`
 	// Issued orders configs: the connector refuses one older than the
 	// newest it accepted, so a node cannot replay an old config.
 	Issued time.Time `json:"issued"`
@@ -39,7 +40,7 @@ type SignedSmartDNS struct {
 func SmartDNSSigningPayload(s SignedSmartDNS) []byte {
 	h := sha256.New()
 	writeField(h, "ingressd smartdns site v1")
-	writeField(h, s.Site)
+	writeField(h, s.Connector)
 	writeInt(h, s.Issued.UnixNano())
 	writeField(h, s.Key)
 	sum := sha256.Sum256(s.Config)
@@ -54,10 +55,11 @@ func SignSmartDNS(s *SignedSmartDNS, key ed25519.PrivateKey) {
 }
 
 // Verify checks the signature with the envelope's own key and the binding
-// to site; the caller compares Key with the key it pinned.
-func (s SignedSmartDNS) Verify(site string) error {
-	if s.Site == "" || s.Site != site {
-		return fmt.Errorf("smart DNS config is for site %q, not %q", s.Site, site)
+// to the connector's public key; the caller compares Key with the key it
+// pinned.
+func (s SignedSmartDNS) Verify(connector string) error {
+	if s.Connector == "" || s.Connector != connector {
+		return fmt.Errorf("smart DNS config is for connector %q, not this one", s.Connector)
 	}
 	if s.Issued.IsZero() {
 		return errors.New("smart DNS config has no issue time")

@@ -167,7 +167,7 @@ func (c *sdController) update() {
 		return
 	}
 	st := s.stateCopy()
-	tunnel := st.Tunnel()
+	connector := s.priv.PublicKey().String()
 	var best *candidate
 	var refused []string
 	for _, es := range st.Edges {
@@ -180,7 +180,7 @@ func (c *sdController) update() {
 			refused = append(refused, "unreadable config: "+err.Error())
 			continue
 		}
-		if err := env.Verify(tunnel); err != nil {
+		if err := env.Verify(connector); err != nil {
 			refused = append(refused, err.Error())
 			continue
 		}
