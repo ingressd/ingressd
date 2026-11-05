@@ -8,6 +8,7 @@ package render
 import (
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net/netip"
 	"slices"
@@ -126,6 +127,11 @@ func TunnelRulePriority(table int) int { return RulePriorityBase + table - Table
 
 // Render produces the plan for cfg, which must already be valid.
 func Render(cfg *config.Config, res Resolver, keys Keys, opts Options) (*Plan, error) {
+	// An app may otherwise take over the machine host (see controlHosts),
+	// and with realms that would hand one tenant the node's own endpoints.
+	if len(cfg.Realms) > 0 && opts.MachineHost != "" && appHost(cfg, opts.MachineHost) {
+		return nil, fmt.Errorf("an app claims the node's machine host %s, which realms may not", opts.MachineHost)
+	}
 	net, err := renderNetwork(cfg, keys)
 	if err != nil {
 		return nil, err

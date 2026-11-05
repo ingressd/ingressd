@@ -140,16 +140,24 @@ func (s *Service) ApplyRemoteRevoke(ctx context.Context, r nodeproto.AuthRevoke)
 		return err
 	}
 	if !r.Before.IsZero() && r.Email != "" {
+		if s.hasRealms() {
+			return errors.New("auth_revoke by email applies to every realm on the node and is refused; use realms.<name>.access.revoked_before")
+		}
 		_, err := s.store.RevokeBefore(ctx, r.Email, r.Before)
 		return err
 	}
 	return errors.New("auth_revoke needs sid, or email and before")
 }
 
+func (s *Service) hasRealms() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.st != nil && s.st.realms != nil
+}
+
 // revokedByConfig applies access.revoked_before and access.revoked_sessions
-// (delivered in panel snapshots) to a session.
-func revokedByConfig(cfg *config.Config, sid, email string, issued time.Time) bool {
-	a := cfg.Access
+// (delivered in panel snapshots) of the governing access block to a session.
+func revokedByConfig(a *config.Access, sid, email string, issued time.Time) bool {
 	if a == nil {
 		return false
 	}
@@ -169,15 +177,17 @@ func revokedByConfig(cfg *config.Config, sid, email string, issued time.Time) bo
 // acceptSession turns verified cookie claims into a live session: the local
 // row if this node knows the session, else (org-wide keys: another node
 // created it) a freshly imported one. Revocations from the config apply
-// either way.
-func (s *Service) acceptSession(ctx context.Context, st *state, c *PortalClaims, ip, ua string) *Session {
+// either way. a is the access block governing the request (the node's, or
+// the app's realm's).
+func (s *Service) acceptSession(ctx context.Context, a *config.Access, c *PortalClaims, ip, ua string) *Session {
 	sess, err := s.store.GetSession(ctx, c.SID)
 	if err != nil {
 		return nil
 	}
 	if sess == nil {
 		known, err := s.store.sessionKnown(ctx, c.SID)
-		if err != nil || known || !OrgKeys(st.cfg) || !c.Expires.After(time.Now()) {
+		orgKeys := a != nil && a.SessionKey != "" && a.JWTKey != ""
+		if err != nil || known || !orgKeys || !c.Expires.After(time.Now()) {
 			return nil // revoked or expired here, or keys are node-local
 		}
 		issued := c.Issued
@@ -188,7 +198,7 @@ func (s *Service) acceptSession(ctx context.Context, st *state, c *PortalClaims,
 			return nil
 		}
 	}
-	if sess.Email != c.Email || revokedByConfig(st.cfg, sess.SID, sess.Email, sess.Created) {
+	if sess.Email != c.Email || revokedByConfig(a, sess.SID, sess.Email, sess.Created) {
 		return nil
 	}
 	sess.Method, sess.Attrs = c.Method, c.Attrs

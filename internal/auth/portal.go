@@ -305,7 +305,7 @@ func (s *Service) portalSession(r *http.Request, st *state) *Session {
 	if err != nil {
 		return nil
 	}
-	return s.acceptSession(r.Context(), st, pc, controlsrv.ClientIP(r), r.UserAgent())
+	return s.acceptSession(r.Context(), st.cfg.Access, pc, controlsrv.ClientIP(r), r.UserAgent())
 }
 
 // sameOrigin rejects cross-site form posts (login and logout CSRF). It
@@ -511,7 +511,7 @@ type ExchangeResponse struct {
 }
 
 func (s *Service) serveExchange(w http.ResponseWriter, r *http.Request) {
-	st, err := s.state()
+	st, err := s.current()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -525,7 +525,12 @@ func (s *Service) serveExchange(w http.ResponseWriter, r *http.Request) {
 		s.exchangeSealed(w, r, st, req)
 		return
 	}
-	// Codes from before sealed codes (stored in this node's database).
+	// Codes from before sealed codes (stored in this node's database). Only
+	// a portal on the node issues them, which realms never have.
+	if st.realms != nil || st.keys == nil {
+		http.Error(w, "invalid or expired code", http.StatusForbidden)
+		return
+	}
 	ac, err := s.store.RedeemAuthCode(r.Context(), req.Code, req.App)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -577,9 +582,19 @@ func (s *Service) serveRevocations(w http.ResponseWriter, r *http.Request) {
 	}
 	etag := `"` + itoa(rev) + `"`
 	var before map[string]int64
+	// edge_auth of a realm app asks for its realm's list: one realm's
+	// revoked_before never signs out another realm's users.
+	realm := r.URL.Query().Get("realm")
 	s.mu.RLock()
-	if s.st != nil && s.st.cfg.Access != nil {
-		a := s.st.cfg.Access
+	var a *config.Access
+	if s.st != nil {
+		if realm != "" {
+			a = s.st.cfg.RealmAccess(realm)
+		} else {
+			a = s.st.cfg.Access
+		}
+	}
+	if a != nil {
 		if len(a.RevokedSessions) > 0 || len(a.RevokedBefore) > 0 {
 			sids = append(sids, a.RevokedSessions...)
 			slices.Sort(sids)
@@ -606,7 +621,12 @@ func (s *Service) serveRevocations(w http.ResponseWriter, r *http.Request) {
 // exchangeSealed redeems a sealed callback code (see SealCode). Any node of
 // the org can redeem it; each node redeems a code at most once.
 func (s *Service) exchangeSealed(w http.ResponseWriter, r *http.Request, st *state, req ExchangeRequest) {
-	ac, err := st.keys.OpenCode(req.Code)
+	keys, a, ok := st.appAccess(req.App)
+	if !ok {
+		http.Error(w, "invalid or expired code", http.StatusForbidden)
+		return
+	}
+	ac, err := keys.OpenCode(req.Code)
 	if err != nil || ac.App != req.App {
 		http.Error(w, "invalid or expired code", http.StatusForbidden)
 		return
@@ -625,7 +645,7 @@ func (s *Service) exchangeSealed(w http.ResponseWriter, r *http.Request, st *sta
 	// fixation). This node's portal always seals the nonce; the hosted
 	// panel's central portal does not carry it yet, so its codes are
 	// checked only when they have one.
-	if ac.Nonce != "" || !External(st.cfg) {
+	if ac.Nonce != "" || a == nil || a.PortalURL == "" {
 		if req.Nonce == "" || !hmac.Equal([]byte(ac.Nonce), []byte(FlowNonceHash(req.Nonce))) {
 			http.Error(w, "sign-in was started in another browser", http.StatusForbidden)
 			return
@@ -638,7 +658,7 @@ func (s *Service) exchangeSealed(w http.ResponseWriter, r *http.Request, st *sta
 		http.Error(w, "invalid or expired code", http.StatusForbidden)
 		return
 	}
-	sess := s.acceptSession(r.Context(), st, &PortalClaims{SID: ac.SID, Email: ac.Email, Expires: ac.SessionExpires, Issued: ac.SessionIssued,
+	sess := s.acceptSession(r.Context(), a, &PortalClaims{SID: ac.SID, Email: ac.Email, Expires: ac.SessionExpires, Issued: ac.SessionIssued,
 		Method: ac.Method, Attrs: ac.Attrs}, "", "")
 	if sess == nil {
 		http.Error(w, "session is no longer valid", http.StatusForbidden)
@@ -661,7 +681,7 @@ func (s *Service) exchangeSealed(w http.ResponseWriter, r *http.Request, st *sta
 		http.Error(w, "not allowed: "+sess.Email+" may not access this app", http.StatusForbidden)
 		return
 	}
-	tok, err := st.keys.SealApp(AppClaims{SID: ac.SID, Email: sess.Email, App: ac.App, Grants: grants, IssuedAt: time.Now(), Expires: exp,
+	tok, err := keys.SealApp(AppClaims{SID: ac.SID, Email: sess.Email, App: ac.App, Grants: grants, IssuedAt: time.Now(), Expires: exp,
 		Method: sess.Method, Attrs: sess.Attrs})
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)

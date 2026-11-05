@@ -41,7 +41,7 @@ func (s *Service) PlayAuthenticate(w http.ResponseWriter, r *http.Request, polic
 
 	if c, err := r.Cookie(PlayCookieName); err == nil {
 		if pc, err := st.keys.OpenPlay(c.Value); err == nil {
-			if sess := s.acceptSession(r.Context(), st, pc, ip, r.UserAgent()); sess != nil {
+			if sess := s.acceptSession(r.Context(), st.cfg.Access, pc, ip, r.UserAgent()); sess != nil {
 				if allowed(sess.Email) {
 					return sess.Email, true
 				}
