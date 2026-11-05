@@ -61,6 +61,8 @@ type Handler struct {
 	// Realm (shared nodes) also scopes the cookie key, and selects the
 	// realm's revocation list.
 	Realm string `json:"realm,omitempty"`
+	// Audience is the identity assertion's aud ("" means App).
+	Audience string `json:"audience,omitempty"`
 	// PortalURL is the login portal, e.g. https://auth.example.com.
 	PortalURL string `json:"portal_url"`
 	// SessionKey is the base64 master key the cookie and service-token
