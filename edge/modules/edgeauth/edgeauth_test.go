@@ -43,6 +43,17 @@ func TestDeriveVector(t *testing.T) {
 
 const deriveVector = "c21d56724026cde83c7e95aa589b69a54386518c301d9ac3bec055f9cc372795"
 
+// Shared test vector with pkg/access (TestRealmDeriveVector).
+func TestRealmDeriveVector(t *testing.T) {
+	if appCookieInfo("", "web") != kdfPrefix+"edge_auth/cookie/web" {
+		t.Fatal("configs without realms must keep their cookie keys")
+	}
+	got := hex.EncodeToString(derive([]byte("0123456789abcdef0123456789abcdef"), appCookieInfo("tq7k2m", "tq7k2m.nas")))
+	if want := "bc33c03792797154289ad17ee699ece4d3d45f720820bf1307545c5f43ee8ee2"; got != want {
+		t.Fatalf("derive = %s, want %s", got, want)
+	}
+}
+
 type fixture struct {
 	master  []byte
 	jwt     *ecdsa.PrivateKey
@@ -52,6 +63,8 @@ type fixture struct {
 	rev     int
 	down    bool   // the revocation list is unavailable
 	nonce   string // of the last code exchange
+	realm   string // cookies are sealed for this realm
+	query   string // of the last revocation list request
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -97,6 +110,7 @@ func newFixture(t *testing.T) *fixture {
 	mux.HandleFunc("GET /v1/revocations", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		f.query = r.URL.RawQuery
 		if f.down {
 			http.Error(w, "starting", http.StatusServiceUnavailable)
 			return
@@ -127,7 +141,7 @@ func (f *fixture) seal(t *testing.T, sid, email string, grants map[string]string
 }
 
 func (f *fixture) sealAt(t *testing.T, iat time.Time, sid, email string, grants map[string]string, exp time.Time) string {
-	key, err := paseto.V4SymmetricKeyFromBytes(derive(f.master, kdfPrefix+"edge_auth/cookie/web"))
+	key, err := paseto.V4SymmetricKeyFromBytes(derive(f.master, appCookieInfo(f.realm, "web")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -643,6 +657,33 @@ func TestRevocationsUnknownAfterRestart(t *testing.T) {
 			t.Fatalf("pre-restart cookie still refused after the list came back (status %d)", resp.StatusCode)
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// A realm app polls its realm's revocation list and accepts only cookies
+// keyed for its realm.
+func TestEdgeAuthRealm(t *testing.T) {
+	f := newFixture(t)
+	tester := caddytest.NewTester(t).WithDefaultOverrides(caddytest.Config{AdminPort: 2939})
+	tester.InitServer(f.config(t, func(h map[string]any) { h["realm"] = "ra" }), "json")
+	c := client{t, &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	ck := func(v string) map[string]string { return map[string]string{"Cookie": "__edge_web=" + v} }
+	grants := map[string]string{"members": "v1"}
+	f.realm = "ra"
+	if resp, _ := c.get("/x", ck(f.seal(t, "sid-ra", "alice@example.com", grants, time.Now().Add(time.Hour)))); resp.StatusCode != 200 {
+		t.Fatalf("realm cookie: status %d", resp.StatusCode)
+	}
+	for _, other := range []string{"", "rb"} {
+		f.realm = other
+		if resp, _ := c.get("/x", ck(f.seal(t, "sid-x", "alice@example.com", grants, time.Now().Add(time.Hour)))); resp.StatusCode != http.StatusFound {
+			t.Errorf("cookie keyed for realm %q accepted: status %d", other, resp.StatusCode)
+		}
+	}
+	f.mu.Lock()
+	q := f.query
+	f.mu.Unlock()
+	if q != "realm=ra" {
+		t.Errorf("revocation list query %q, want realm=ra", q)
 	}
 }
 

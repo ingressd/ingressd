@@ -156,6 +156,7 @@ var pollers = caddy.NewUsagePool()
 type poller struct {
 	client   *http.Client
 	host     string
+	path     string // the revocation list, with the realm if any
 	interval time.Duration
 	logger   *zap.Logger
 
@@ -170,9 +171,9 @@ type poller struct {
 	synced  atomic.Bool
 }
 
-func startPoller(client *http.Client, host string, interval time.Duration, logger *zap.Logger) *poller {
+func startPoller(client *http.Client, host, path string, interval time.Duration, logger *zap.Logger) *poller {
 	ctx, cancel := context.WithCancel(context.Background())
-	p := &poller{client: client, host: host, interval: interval, logger: logger, cancel: cancel, started: time.Now().Truncate(time.Second)}
+	p := &poller{client: client, host: host, path: path, interval: interval, logger: logger, cancel: cancel, started: time.Now().Truncate(time.Second)}
 	empty := map[string]struct{}{}
 	p.set.Store(&empty)
 	// Fetch once before serving; failures are retried in the background,
@@ -239,7 +240,7 @@ func (p *poller) run(ctx context.Context) {
 }
 
 func (p *poller) fetch(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+p.host+"/v1/revocations", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+p.host+p.path, nil)
 	if err != nil {
 		return err
 	}

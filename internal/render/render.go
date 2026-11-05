@@ -8,6 +8,7 @@ package render
 import (
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net/netip"
 	"slices"
@@ -113,13 +114,24 @@ const (
 	// Policy-routing rules in this priority range belong to ingressd.
 	RulePriorityBase = 10000
 	RulePriorityMax  = 10999
-	// TableBase is the first routing table (and fwmark) used for remapped tunnels.
-	TableBase  = 1000
+	// TableBase is the first routing table (and fwmark) used for remapped
+	// tunnels (see config.Config.TunnelTable).
+	TableBase  = config.TunnelTableMin
 	DefaultMTU = 1420
 )
 
+// TunnelRulePriority is the policy-routing rule priority of a remapped
+// tunnel's table. It follows from the table number alone, so explicit tables
+// keep their rules stable too, below the VPN exits' range.
+func TunnelRulePriority(table int) int { return RulePriorityBase + table - TableBase }
+
 // Render produces the plan for cfg, which must already be valid.
 func Render(cfg *config.Config, res Resolver, keys Keys, opts Options) (*Plan, error) {
+	// An app may otherwise take over the machine host (see controlHosts),
+	// and with realms that would hand one tenant the node's own endpoints.
+	if m := machineHost(cfg, opts); len(cfg.Realms) > 0 && m != "" && appHost(cfg, m) {
+		return nil, fmt.Errorf("an app claims the node's machine host %s, which realms may not", m)
+	}
 	net, err := renderNetwork(cfg, keys)
 	if err != nil {
 		return nil, err

@@ -3,6 +3,7 @@
 package render
 
 import (
+	"cmp"
 	"maps"
 	"net/netip"
 	"slices"
@@ -31,10 +32,16 @@ func ControlHosts(cfg *config.Config) []string {
 // an app already claims it.
 func controlHosts(cfg *config.Config, opts Options) []string {
 	hosts := ControlHosts(cfg)
-	if m := strings.ToLower(opts.MachineHost); m != "" && !slices.Contains(hosts, m) && !appHost(cfg, m) {
+	if m := strings.ToLower(machineHost(cfg, opts)); m != "" && !slices.Contains(hosts, m) && !appHost(cfg, m) {
 		hosts = append(hosts, m)
 	}
 	return hosts
+}
+
+// machineHost is the node's own hostname or public IP serving the machine
+// endpoints: the enrolment endpoint, else (realms) the public IPv4.
+func machineHost(cfg *config.Config, opts Options) string {
+	return cmp.Or(opts.MachineHost, cfg.MachineHostFallback())
 }
 
 func appHost(cfg *config.Config, host string) bool {
@@ -51,8 +58,9 @@ func appHost(cfg *config.Config, host string) bool {
 // machineIP returns the machine host if it is a bare IP address that needs
 // an internal-CA certificate.
 func machineIP(cfg *config.Config, opts Options) (string, bool) {
-	a, err := netip.ParseAddr(opts.MachineHost)
-	if err != nil || appHost(cfg, opts.MachineHost) {
+	m := machineHost(cfg, opts)
+	a, err := netip.ParseAddr(m)
+	if err != nil || appHost(cfg, m) {
 		return "", false
 	}
 	return a.String(), true

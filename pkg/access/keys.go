@@ -25,7 +25,21 @@ type Keys struct {
 	master []byte
 	JWT    *ecdsa.PrivateKey
 	KID    string
+	// realm scopes app cookie keys to one realm (see ForRealm).
+	realm string
 }
+
+// ForRealm returns the keys as one realm's apps use them: app cookie keys
+// also derive from the realm, so an app cookie never opens in another realm
+// even under the same master key and app name.
+func (k *Keys) ForRealm(realm string) *Keys {
+	c := *k
+	c.realm = realm
+	return &c
+}
+
+// Realm is the realm the keys are scoped to ("" without realms).
+func (k *Keys) Realm() string { return k.realm }
 
 // ParseKeys decodes stored key material.
 func ParseKeys(sessionRaw, jwtRaw string) (*Keys, error) {
@@ -70,7 +84,17 @@ func derive(master []byte, info string) []byte {
 
 // AppCookieKey encrypts the __edge_<app> cookie of one app.
 func (k *Keys) AppCookieKey(app string) []byte {
-	return derive(k.master, kdfPrefix+"edge_auth/cookie/"+app)
+	return derive(k.master, AppCookieInfo(k.realm, app))
+}
+
+// AppCookieInfo is the HKDF info of an app's cookie key (shared with
+// edge_auth). Realm and app names cannot contain "/", so the realm form
+// never collides with the plain one.
+func AppCookieInfo(realm, app string) string {
+	if realm == "" {
+		return kdfPrefix + "edge_auth/cookie/" + app
+	}
+	return kdfPrefix + "edge_auth/realm/" + realm + "/cookie/" + app
 }
 
 // PortalCookieKey encrypts the portal's own session cookie.

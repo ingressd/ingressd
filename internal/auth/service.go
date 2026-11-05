@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/netip"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -49,6 +51,28 @@ type state struct {
 	// providers are the sign-in methods of this node's own portal
 	// (access.providers), with secrets resolved.
 	providers map[string]*idp.Provider
+	// realms is non-nil when the config has realms: each realm's access
+	// settings and keys (realms without access settings are absent). The
+	// node-wide fields above are then unused.
+	realms map[string]*realmState
+}
+
+// realmState is what one realm signs in with.
+type realmState struct {
+	access *config.Access
+	keys   *Keys
+}
+
+// appAccess returns the keys and access settings that govern an app.
+func (st *state) appAccess(app string) (*Keys, *config.Access, bool) {
+	if st.realms != nil {
+		r, ok := st.realms[st.cfg.Apps[app].Realm]
+		if !ok {
+			return nil, nil, false
+		}
+		return r.keys, r.access, true
+	}
+	return st.keys, st.cfg.Access, st.keys != nil
 }
 
 // SecretSource is what Update needs from the secrets store.
@@ -91,7 +115,20 @@ func (s *Service) Store() *Store { return s.store }
 // Update installs a new (validated) config.
 func (s *Service) Update(cfg *config.Config, sec SecretSource) error {
 	ns := &state{cfg: cfg, eng: NewEngine(cfg)}
-	if Needed(cfg) {
+	if len(cfg.Realms) > 0 {
+		ns.realms = map[string]*realmState{}
+		for _, name := range slices.Sorted(maps.Keys(cfg.Realms)) {
+			a := cfg.Realms[name].Access
+			if a == nil {
+				continue
+			}
+			keys, err := LoadRealmKeys(cfg, sec, name)
+			if err != nil {
+				return err
+			}
+			ns.realms[name] = &realmState{access: a, keys: keys}
+		}
+	} else if Needed(cfg) {
 		keys, err := LoadConfigKeys(cfg, sec)
 		if err != nil {
 			return err
@@ -111,6 +148,17 @@ func (s *Service) Update(cfg *config.Config, sec SecretSource) error {
 	s.st = ns
 	s.mu.Unlock()
 	return nil
+}
+
+// current returns the installed state when anything signs in: the node
+// (see state) or any realm.
+func (s *Service) current() (*state, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.st == nil || (s.st.keys == nil && len(s.st.realms) == 0) {
+		return nil, errors.New("access is not configured")
+	}
+	return s.st, nil
 }
 
 func (s *Service) state() (*state, error) {

@@ -62,9 +62,11 @@ test/netns/smartdns-e2e.sh               smartdns
 test/netns/remote-updates-e2e.sh         remote-updates
 test/netns/smartdns-vpn-exits-e2e.sh     smartdns-vpn-exits
 test/netns/smartdns-exit-failover-e2e.sh smartdns-exit-failover
+test/netns/realms-e2e.sh                 realms
 
 # --- Test helpers ---------------------------------------------------------------
 test/netns/sdtool/*               smartdns smartdns-vpn-exits smartdns-exit-failover
+test/netns/realmtool/*            realms
 test/fakepanel/*                  managed-node remote-updates
 scripts/releasetool/*             remote-updates
 

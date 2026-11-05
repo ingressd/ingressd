@@ -42,7 +42,18 @@ func External(cfg *config.Config) bool {
 // Needed reports whether the config signs anyone in: the login portal (here
 // or external) or a login-to-play host.
 func Needed(cfg *config.Config) bool {
-	return Enabled(cfg) || External(cfg) || len(cfg.LoginToPlayHosts()) > 0
+	return Enabled(cfg) || External(cfg) || len(cfg.LoginToPlayHosts()) > 0 || realmsSignIn(cfg)
+}
+
+// realmsSignIn reports whether any realm has access settings (realms sign
+// in on their external portals; the node redeems their callback codes).
+func realmsSignIn(cfg *config.Config) bool {
+	for _, r := range cfg.Realms {
+		if r.Access != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // OrgKeys reports whether the config supplies org-wide keys
@@ -63,6 +74,24 @@ func KeyRefs(cfg *config.Config) (session, jwt string) {
 // LoadConfigKeys decodes the keys the config refers to (see KeyRefs).
 func LoadConfigKeys(cfg *config.Config, res Resolver) (*Keys, error) {
 	sref, jref := KeyRefs(cfg)
+	return loadKeys(res, sref, jref)
+}
+
+// LoadRealmKeys decodes a realm's own keys (realms.<name>.access), scoped
+// to the realm (see Keys.ForRealm). Realms never use the node's keys.
+func LoadRealmKeys(cfg *config.Config, res Resolver, realm string) (*Keys, error) {
+	a := cfg.RealmAccess(realm)
+	if a == nil || a.SessionKey == "" || a.JWTKey == "" {
+		return nil, fmt.Errorf("realm %q has no session_key and jwt_key", realm)
+	}
+	k, err := loadKeys(res, a.SessionKey, a.JWTKey)
+	if err != nil {
+		return nil, fmt.Errorf("realm %s: %w", realm, err)
+	}
+	return k.ForRealm(realm), nil
+}
+
+func loadKeys(res Resolver, sref, jref string) (*Keys, error) {
 	sk, err := res.Resolve(sref)
 	if err != nil {
 		return nil, fmt.Errorf("access session key: %w", err)
@@ -76,9 +105,10 @@ func LoadConfigKeys(cfg *config.Config, res Resolver) (*Keys, error) {
 
 // EnsureKeys generates the Access keys if they are missing. It reports
 // whether the store changed (and so needs saving). Configs with org-wide
-// keys (managed nodes) need nothing generated.
+// keys (managed nodes) or realms (each brings its own) need nothing
+// generated.
 func EnsureKeys(cfg *config.Config, st *secrets.Store) (bool, error) {
-	if !Needed(cfg) || OrgKeys(cfg) {
+	if !Needed(cfg) || OrgKeys(cfg) || len(cfg.Realms) > 0 {
 		return false, nil
 	}
 	changed := false

@@ -5,7 +5,6 @@ package render
 import (
 	"fmt"
 	"net/netip"
-	"slices"
 	"strings"
 
 	"github.com/ingressd/ingressd/pkg/config"
@@ -40,7 +39,7 @@ func l4Mark(cfg *config.Config, tunnel string) int {
 	if cfg.Tunnels[tunnel].VirtualPrefix == "" {
 		return 0
 	}
-	return TableBase + slices.Index(sortedKeys(cfg.Tunnels), tunnel)
+	return cfg.TunnelTable(tunnel)
 }
 
 // l4NeedsForwarding reports whether any service is forwarded by the kernel,

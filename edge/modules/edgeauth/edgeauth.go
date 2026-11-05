@@ -58,6 +58,9 @@ func init() {
 type Handler struct {
 	// App is the app's name; it scopes the cookie and its key.
 	App string `json:"app"`
+	// Realm (shared nodes) also scopes the cookie key, and selects the
+	// realm's revocation list.
+	Realm string `json:"realm,omitempty"`
 	// PortalURL is the login portal, e.g. https://auth.example.com.
 	PortalURL string `json:"portal_url"`
 	// SessionKey is the base64 master key the cookie and service-token
@@ -166,7 +169,7 @@ func (h *Handler) Provision(ctx caddy.Context) error {
 	if err != nil || len(master) < 32 {
 		return errors.New("session_key must be at least 32 bytes, base64")
 	}
-	ck, err := paseto.V4SymmetricKeyFromBytes(derive(master, kdfPrefix+"edge_auth/cookie/"+h.App))
+	ck, err := paseto.V4SymmetricKeyFromBytes(derive(master, appCookieInfo(h.Realm, h.App)))
 	if err != nil {
 		return err
 	}
@@ -245,9 +248,13 @@ func (h *Handler) Provision(ctx caddy.Context) error {
 		if interval <= 0 {
 			interval = 2 * time.Second
 		}
-		h.pollerKey = sock + "|" + h.ControlHost
+		path := "/v1/revocations"
+		if h.Realm != "" {
+			path += "?realm=" + url.QueryEscape(h.Realm)
+		}
+		h.pollerKey = sock + "|" + h.ControlHost + "|" + h.Realm
 		v, _, err := pollers.LoadOrNew(h.pollerKey, func() (caddy.Destructor, error) {
-			return startPoller(h.client, h.ControlHost, interval, h.logger), nil
+			return startPoller(h.client, h.ControlHost, path, interval, h.logger), nil
 		})
 		if err != nil {
 			return err
@@ -296,6 +303,14 @@ func (h *Handler) country(ip netip.Addr) string {
 // invalidate every session cookie, auth code and service-token verifier, so
 // it keeps the pre-rename name until a key-rotation migration replaces it.
 const kdfPrefix = "homeedge/" // legacy homeedge name, remove after 2027-01 (key-derivation label)
+
+// appCookieInfo must match pkg/access.AppCookieInfo.
+func appCookieInfo(realm, app string) string {
+	if realm == "" {
+		return kdfPrefix + "edge_auth/cookie/" + app
+	}
+	return kdfPrefix + "edge_auth/realm/" + realm + "/cookie/" + app
+}
 
 // derive must match internal/auth.derive (HKDF-SHA256, no salt).
 func derive(master []byte, info string) []byte {

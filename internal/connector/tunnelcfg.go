@@ -45,9 +45,9 @@ func TunnelConfig(cfg *config.Config, keys EdgeKeys, name string) (proto.TunnelC
 	if err != nil {
 		return proto.TunnelConfig{}, err
 	}
-	machine := ""
+	machine := cfg.MachineHostFallback()
 	if DefaultHost != nil {
-		machine = DefaultHost()
+		machine = cmp.Or(DefaultHost(), machine)
 	}
 	host := cmp.Or(cfg.Edge.Admin.Hostname, machine, cfg.Edge.PublicIPv4)
 	if host == "" {
