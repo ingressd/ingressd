@@ -1,0 +1,54 @@
+add table inet homeedge # legacy homeedge name, remove after 2027-01
+delete table inet homeedge # legacy homeedge name, remove after 2027-01
+add table ip homeedge_nat # legacy homeedge name, remove after 2027-01
+delete table ip homeedge_nat # legacy homeedge name, remove after 2027-01
+add table ip homeedge_l4 # legacy homeedge name, remove after 2027-01
+delete table ip homeedge_l4 # legacy homeedge name, remove after 2027-01
+add table ip homeedge_smartdns # legacy homeedge name, remove after 2027-01
+delete table ip homeedge_smartdns # legacy homeedge name, remove after 2027-01
+add table inet ingressd
+delete table inet ingressd
+add table ip ingressd_nat
+delete table ip ingressd_nat
+add table ip ingressd_l4
+delete table ip ingressd_l4
+
+table inet ingressd {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ct state established,related accept
+		ct state invalid drop
+		iifname "lo" accept
+		iifname "ix-home" ip daddr 10.100.1.1 meta l4proto { tcp, udp } th dport 53 accept
+		iifname "ix-home" ip daddr 10.100.1.1 tcp dport { 51080, 51443 } accept
+		iifname { "ix-home" } drop
+		meta l4proto { icmp, ipv6-icmp } accept
+		tcp dport { 22, 80, 443 } accept
+		udp dport { 443, 51820, 51900 } accept
+		iifname "ix-mesh" ip saddr { 10.255.0.2 } tcp dport { 51901, 51902 } accept
+		ip saddr { 10.0.0.0/8, 100.64.0.0/10, 172.16.0.0/12, 192.168.0.0/16 } ip daddr 192.168.1.5 meta l4proto { tcp, udp } th dport 53 accept
+		ip saddr { 10.0.0.0/8, 100.64.0.0/10, 172.16.0.0/12, 192.168.0.0/16 } ip daddr 192.168.1.5 tcp dport { 51080, 51443 } accept
+	}
+
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+		ct state established,related accept
+	}
+
+	chain output {
+		type filter hook output priority filter; policy accept;
+		meta skuid != 0 meta l4proto tcp ip daddr { 169.254.0.0/16, 10.255.0.0/16 } drop
+	}
+}
+add table ip ingressd_smartdns
+delete table ip ingressd_smartdns
+
+table ip ingressd_smartdns {
+	chain prerouting {
+		type nat hook prerouting priority -100; policy accept;
+		ip daddr 10.100.1.1 tcp dport 443 dnat to 10.100.1.1:51443
+		ip daddr 10.100.1.1 tcp dport 80 dnat to 10.100.1.1:51080
+		ip daddr 192.168.1.5 tcp dport 443 dnat to 192.168.1.5:51443
+		ip daddr 192.168.1.5 tcp dport 80 dnat to 192.168.1.5:51080
+	}
+}

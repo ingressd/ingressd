@@ -114,9 +114,13 @@ var privateSources = "10.0.0.0/8, 100.64.0.0/10, 172.16.0.0/12, 192.168.0.0/16"
 // smartDNSInputRules returns input-chain rules for the managed firewall:
 // mesh services only from mesh peers on ix-mesh, and the resolver/relay only
 // from tunnels (or private sources for explicit LAN listen addresses).
-func smartDNSInputRules(cfg *config.Config) string {
+func smartDNSInputRules(cfg *config.Config) string { return smartDNSRules(cfg, true, true) }
+
+// smartDNSRules returns the rules for listen addresses on a tunnel's transit
+// network (tunnel) and the others: mesh and LAN listen addresses (other).
+func smartDNSRules(cfg *config.Config, tunnel, other bool) string {
 	var b strings.Builder
-	if m := cfg.Mesh; m != nil && len(m.Peers) > 0 {
+	if m := cfg.Mesh; other && m != nil && len(m.Peers) > 0 {
 		var peers []string
 		for _, id := range sortedKeys(m.Peers) {
 			if a, ok := m.Peers[id].PeerAddr(); ok {
@@ -134,8 +138,12 @@ func smartDNSInputRules(cfg *config.Config) string {
 	}
 	for _, a := range cfg.SmartDNSListen() {
 		match := fmt.Sprintf("ip saddr { %s } ip daddr %s", privateSources, a)
-		if ifname, ok := transitIf[a]; ok {
+		ifname, onTunnel := transitIf[a]
+		if onTunnel {
 			match = fmt.Sprintf("iifname %q ip daddr %s", ifname, a)
+		}
+		if (onTunnel && !tunnel) || (!onTunnel && !other) {
+			continue
 		}
 		fmt.Fprintf(&b, "\t\t%s meta l4proto { tcp, udp } th dport 53 accept\n", match)
 		fmt.Fprintf(&b, "\t\t%s tcp dport { %d, %d } accept\n", match, config.SmartDNSRelayHTTPPort, config.SmartDNSRelayTLSPort)

@@ -11,7 +11,7 @@ import (
 
 func renderNetwork(cfg *config.Config, keys Keys) (Network, error) {
 	n := Network{Interfaces: []Interface{}, Routes: []Route{}, Rules: []Rule{}, IPForward: l4NeedsForwarding(cfg)}
-	for i, name := range sortedKeys(cfg.Tunnels) {
+	for _, name := range sortedKeys(cfg.Tunnels) {
 		t := cfg.Tunnels[name]
 		ifname := config.InterfaceName(name)
 		transit, err := netip.ParsePrefix(t.Transit)
@@ -51,12 +51,12 @@ func renderNetwork(cfg *config.Config, keys Keys) (Network, error) {
 		}
 		// Remapped tunnel: sockets connect to the virtual prefix (main
 		// table); after DNAT the fwmark picks a table holding the real subnet.
-		id := TableBase + i
+		id := cfg.TunnelTable(name)
 		n.Routes = append(n.Routes,
 			Route{Dst: t.VirtualPrefix, Dev: ifname},
 			Route{Dst: t.Subnets[0], Dev: ifname, Table: id},
 		)
-		n.Rules = append(n.Rules, Rule{Priority: RulePriorityBase + i, Mark: id, Table: id})
+		n.Rules = append(n.Rules, Rule{Priority: TunnelRulePriority(id), Mark: id, Table: id})
 		n.NoRPFilter = append(n.NoRPFilter, ifname)
 	}
 	return n, nil
