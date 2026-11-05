@@ -171,7 +171,7 @@ func TestMeasureRTTAndReports(t *testing.T) {
 			if err != nil {
 				return
 			}
-			c.Close()
+			_ = c.Close()
 		}
 	}()
 	s, e, l := rttSession(t)

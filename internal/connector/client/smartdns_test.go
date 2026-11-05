@@ -180,9 +180,9 @@ func TestSmartDNSDecryptVPN(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, _ = io.WriteString(ew, "[Interface]\nPrivateKey = x\n")
-		ew.Close()
+		_ = ew.Close()
 		if aw != nil {
-			aw.Close()
+			_ = aw.Close()
 		}
 		if armored {
 			return buf.String()
@@ -199,9 +199,9 @@ func TestSmartDNSDecryptVPN(t *testing.T) {
 	var buf bytes.Buffer
 	aw := armor.NewWriter(&buf)
 	ew, _ := age.Encrypt(aw, other.Recipient())
-	io.WriteString(ew, "secret")
-	ew.Close()
-	aw.Close()
+	_, _ = io.WriteString(ew, "secret")
+	_ = ew.Close()
+	_ = aw.Close()
 	if _, err := c.decrypt(buf.String()); err == nil || !strings.Contains(err.Error(), "not encrypted to this connector") {
 		t.Errorf("foreign ciphertext: %v", err)
 	}

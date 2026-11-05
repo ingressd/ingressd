@@ -86,7 +86,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	req.Header.Set(HopHeader, SignHop([]byte(t.Forward.Secret), t.Forward.Node, t.Forward.App, t.now()))
 	req.URL.Scheme = "http"
-	return t.HTTPTransport.Transport.RoundTrip(req)
+	return t.Transport.RoundTrip(req)
 }
 
 // forwarded reports whether r arrived through a forward listener.

@@ -209,7 +209,7 @@ func (v *vpnExit) probe(ctx context.Context) {
 		v.fails++
 		return
 	}
-	c.Close()
+	_ = c.Close()
 	v.fails, v.lastOK = 0, time.Now()
 }
 

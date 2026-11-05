@@ -70,8 +70,12 @@ func seal(args []string) {
 	if _, err := w.Write(in); err != nil {
 		log.Fatal(err)
 	}
-	w.Close()
-	aw.Close()
+	if err := w.Close(); err != nil {
+		log.Fatal(err)
+	}
+	if err := aw.Close(); err != nil {
+		log.Fatal(err)
+	}
 	fmt.Print(buf.String())
 }
 

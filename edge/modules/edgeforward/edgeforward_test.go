@@ -133,9 +133,9 @@ func newTransport(t *testing.T) (*Transport, *recordRT) {
 		t.Fatal(err)
 	}
 	rec := &recordRT{}
-	tr.HTTPTransport.Transport = &http.Transport{}
-	tr.HTTPTransport.Transport.RegisterProtocol("http", rec)
-	tr.HTTPTransport.Transport.RegisterProtocol("https", rec)
+	tr.Transport = &http.Transport{}
+	tr.Transport.RegisterProtocol("http", rec)
+	tr.Transport.RegisterProtocol("https", rec)
 	return tr, rec
 }
 

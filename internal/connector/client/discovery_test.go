@@ -253,7 +253,7 @@ func TestEnrollAlternateEdgeToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	deadURL := "https://example.com:" + strconv.Itoa(l.Addr().(*net.TCPAddr).Port)
-	l.Close()
+	_ = l.Close()
 
 	enroll := func(tokB string) (*State, error) {
 		js, err := proto.EncodeJoin(proto.Join{Token: "tok-top", Edges: []proto.JoinEdge{
