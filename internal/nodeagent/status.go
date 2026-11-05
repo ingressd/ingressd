@@ -19,6 +19,7 @@ import (
 
 	"github.com/ingressd/ingressd/internal/alerts"
 	"github.com/ingressd/ingressd/internal/apply"
+	"github.com/ingressd/ingressd/internal/connector/proto"
 	"github.com/ingressd/ingressd/internal/edgecert"
 	"github.com/ingressd/ingressd/internal/observe"
 	"github.com/ingressd/ingressd/internal/tunnel"
@@ -148,6 +149,7 @@ func (a *Agent) tunnelStatus(cfg *config.Config, now time.Time) []nodeproto.Tunn
 					h := c.Health
 					ts.ConnectorVersion, ts.ConnectorInstall, ts.ConnectorOS, ts.ConnectorArch = h.Version, h.Install, h.OS, h.Arch
 					ts.ConnectorUpdate = connectorUpdateState(h.Update)
+					ts.ConnectorEdges = connectorEdges(h.Edges)
 				}
 			}
 		}
@@ -293,4 +295,12 @@ func statusSignature(s nodeproto.Status) string {
 	b, _ := json.Marshal(sig)
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
+}
+
+func connectorEdges(in []proto.EdgeReport) []nodeproto.ConnectorEdge {
+	var out []nodeproto.ConnectorEdge
+	for _, e := range in {
+		out = append(out, nodeproto.ConnectorEdge{Node: e.Node, EdgePublicKey: e.EdgePublicKey, RTTMillis: e.RTTMillis, Up: e.Up, Transport: e.Transport})
+	}
+	return out
 }
