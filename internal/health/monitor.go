@@ -523,6 +523,12 @@ func (m *Monitor) edgeState() EdgeState {
 		}
 		st.Pools[name] = ep
 	}
+	for t := range m.tunnelDown {
+		if st.Tunnels == nil {
+			st.Tunnels = map[string]EdgeTunnel{}
+		}
+		st.Tunnels[t] = EdgeTunnel{Down: true}
+	}
 	return st
 }
 

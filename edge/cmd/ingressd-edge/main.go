@@ -25,6 +25,7 @@ import (
 	_ "github.com/ingressd/ingressd/edge/modules/edgeauth"
 	_ "github.com/ingressd/ingressd/edge/modules/edgechallenge"
 	_ "github.com/ingressd/ingressd/edge/modules/edgefallback"
+	_ "github.com/ingressd/ingressd/edge/modules/edgeforward"
 	_ "github.com/ingressd/ingressd/edge/modules/edgehello"
 	_ "github.com/ingressd/ingressd/edge/modules/edgelb"
 	_ "github.com/ingressd/ingressd/edge/modules/edgestate"

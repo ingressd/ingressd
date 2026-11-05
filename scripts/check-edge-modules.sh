@@ -20,6 +20,9 @@ required=(
 	storages.cache.badger             # cache-handler on-disk store
 	admin.api.souin                   # cache purge API (admin socket only)
 	http.handlers.edge_fallback       # Always Online snapshots
+	http.handlers.edge_forward_verify # PoP forwarding: forward listener guard
+	http.reverse_proxy.transport.edge_forward # PoP forwarding: signed hops to siblings
+	http.reverse_proxy.selection_policies.edge_forward # PoP forwarding: local tunnel, then siblings
 	dns.providers.cloudflare          # caddy-dns/cloudflare
 	http.matchers.maxmind_geolocation # caddy-maxmind-geolocation
 	crowdsec                          # caddy-crowdsec-bouncer app
