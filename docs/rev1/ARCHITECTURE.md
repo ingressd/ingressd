@@ -128,6 +128,10 @@ An exit can egress through a commercial VPN instead of the node's own IP, so tra
 - **Health** (`nodeproto.ExitStatus`, reported in `nodes.health.exits`): `up` means the tunnel had a handshake within 3 minutes; `egress` and `country` come from a trace fetched *through the exit's egress* (Cloudflare's `https://1.1.1.1/cdn-cgi/trace` format, every 10 minutes, 1 minute after a failure, and right after the tunnel comes up; `INGRESSD_SMARTDNS_TRACE_URL` overrides the URL), with edge location checks taking precedence for the country. A mismatch with the expected country is reported in `message`; `endpoint` is the server address the tunnel uses now. A down tunnel fails closed: service names get SERVFAIL, nothing is relayed elsewhere.
 - **Tests**: `go test ./internal/smartdns/... ./internal/render ./pkg/config`, and the netns suite `test/netns/smartdns-vpn-exits-e2e.sh` (two simulated providers as two exits on one node: per-service egress, untouched default route, keepalive/MTU/PSK, endpoint move, fail closed).
 
+### 7.2 Exit failover
+
+A service can list up to four exits of one country in order of preference (`smartdns.services.<name>.exits`; the single `exit` field is normalised into a one-element list). Each home node keeps a sticky active exit per service: new connections use it while it is up, move to the next healthy exit when it goes down, and move back only after the preferred exit has stayed healthy for `smartdns.failback_after` (default 5m). The relay resolves and connects through the same exit and retries the next one only before any client byte was sent; with every exit down the service still fails closed. Home nodes learn a remote exit's health by polling `GET /v1/exits` on the exit node every 5 s, and exit nodes mark a refusal caused by a down exit with `exit_down`. Nodes advertise `smartdns-failover` and report each service's active exit in `status.smartdns_services`. Design, compatibility rules and tests: [EXIT-FAILOVER.md](EXIT-FAILOVER.md); netns suite `test/netns/smartdns-exit-failover-e2e.sh`.
+
 ---
 
 ## 8. Usage metering and quotas

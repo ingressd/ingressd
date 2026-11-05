@@ -1,6 +1,6 @@
-# Exit failover for exit routing (draft)
+# Exit failover for exit routing
 
-Status: draft, not implemented. Extends [ARCHITECTURE.md §7](ARCHITECTURE.md#7-exit-routing-smartdns-in-rev1).
+Status: implemented (node); the panel part (§8) is not. Extends [ARCHITECTURE.md §7](ARCHITECTURE.md#7-exit-routing-smartdns-in-rev1).
 
 ## 1. Problem
 
@@ -44,8 +44,8 @@ smartdns:
   failback_after: 5m               # new, optional
 ```
 
-- `SmartDNSService.Exits []string` is added. `Exit string` stays and means `exits: [<exit>]`. Setting both is a validation error (`smartdns.services.<name>: set exit or exits, not both`). `applySmartDNSDefaults` normalises `exit` into `exits` so the runtime only ever reads the list.
-- Validation of `exits`: 1 to 4 entries, no duplicates, every entry a known exit, and **every exit's `country` equal** (`smartdns.services.<name>.exits[i]: country DE differs from GB of exits[0]`). The shared country is what keeps fail closed meaningful.
+- `SmartDNSService.Exits []string` is added. `Exit string` stays and means `exits: [<exit>]`. Setting both is a validation error (`smartdns.services.<name>: set exit or exits, not both`). `applySmartDNSDefaults` moves `exit` into `exits` (and clears `exit`) so the runtime only ever reads the list; `SmartDNSService.ExitList()` gives the same list for a config built in code without loading.
+- Validation of `exits`: 1 to 4 entries, no duplicates, every entry a known exit, and **every exit's `country` equal** (`smartdns.services.<name>.exits[i]: country DE differs from GB of exits[0]`). The shared country is what keeps fail closed meaningful. Errors name `exits` or `exits[i]` even when the config used `exit` (`smartdns.services.<name>.exits[0]: unknown exit "de"`).
 - `SmartDNS.FailbackAfter` (duration, default 5m, 0 = fail back as soon as the preferred exit is healthy, max 1h).
 - Two exits on the same node are allowed (they protect against a VPN failing, not the node), and the panel warns about it (§8).
 
@@ -73,6 +73,8 @@ type activeExit struct {
 
 "Up" is today's `exitUp` plus the refusal tracking in §5.3. The state survives reconfigures while the service's exit list is unchanged, like `probeState` does for traces.
 
+Besides every lookup, `pick` runs for every service on the manager's 2 s status tick, so health changes are seen (and "healthy since" resets on a flap) while a service has no traffic, and the status stays current. When every exit is down the service has no active exit; the first exit to come back is then used at once (there is nothing to stick to).
+
 ### 5.2 Resolver and relay
 
 - `lookup` takes the exit chosen by `pick` instead of `r.Exit`, and returns it, so the relay resolves and connects through **the same exit** (addresses are location specific).
@@ -84,8 +86,8 @@ type activeExit struct {
 
 Today a home node learns that a remote exit's VPN is down only when a resolve says `exit_up:false`. With a fresh cached answer it hands that answer out and the relay then fails. Two changes:
 
-- **Exit health on the mesh API**: `GET /v1/exits` on exit nodes answers `{"exits":{"gb-lon":{"up":true},"gb-ams":{"up":false,"error":"no recent handshake"}}}` for the exits the node hosts. Home nodes poll it every 5 s, alongside the mesh probe, for remote exits that appear in a service's list, and feed `remoteDown`. Polling stops for exits no service uses.
-- **Typed refusal**: `ConnectResponse` gains `ExitDown bool` (additive JSON field). `handleExitRelay` sets it when `dialOrdered` fails with `errExitDown`, so the home node can tell "exit down, try the next" apart from "this request is not allowed". Older exit nodes leave it false, which means no retry, the same as today.
+- **Exit health on the mesh API**: `GET /v1/exits` on exit nodes answers `{"exits":{"gb-lon":{"up":true},"gb-ams":{"up":false,"error":"no recent handshake"}}}` for the exits the node hosts. Home nodes poll it every 5 s, alongside the mesh probe, for remote exits that appear in a service's list, and feed `remoteDown` (held 15 s, so each poll renews it; the exit node's reason is kept for the status). An exit missing from the answer is treated as down (the exit node does not host it, e.g. before its config is applied). Nodes the mesh probe holds down are not polled. Polling stops for exits no service uses.
+- **Typed refusal**: `ConnectResponse` gains `ExitDown bool` (JSON `exit_down`, additive). `handleExitRelay` sets it when `dialOrdered` fails with `errExitDown`, so the home node can tell "exit down, try the next" apart from "this request is not allowed". Older exit nodes leave it false, which means no retry, the same as today. On a self exit the same rule applies: a dial that fails with `errExitDown` is retried on the next exit, any other dial failure is not.
 
 Detection time with these: a node that disappears is down after `downAfter` failed probes (5 s apart); a VPN that loses its handshake is down after the 3-minute handshake window (unchanged; making that window shorter is a separate decision, since providers can be idle for minutes) or sooner when a dial through it fails.
 
@@ -95,8 +97,8 @@ Each home node runs `pick` on its own, from the same health signals, so siblings
 
 ## 6. Status and usage (`pkg/nodeproto`)
 
-- New `ServiceStatus` in the smartdns status: `{name, exits []string, active string, failover bool, since time.Time, message string}`; `failover` is true when `active` is not `exits[0]`. Additive.
-- Relay usage per service is unchanged; a per-exit breakdown is added to the existing relay counters so the Usage page can show which exit carried the bytes.
+- New `ServiceStatus` `{name, exits []string, active string, failover bool, since time.Time, message string}`, reported as `Status.SmartDNSServices` (JSON `smartdns_services`, additive) through a new `ServiceReporter` node agent hook, and as `services` in the node's status file (`ingressd smartdns status`). `failover` is true when `active` is not `exits[0]`; `active` is empty while every exit is down; `message` says why `exits[0]` is not in use (its down reason, or the time left before failback) or, with every exit down, every exit's reason.
+- Relay usage per service is unchanged. The per-exit breakdown of the relay counters is not implemented yet: it changes the `ServiceUsage` deltas the panel ingests, so it lands together with the panel's Usage page change. The recent lookups already record which exit answered.
 - New capability `CapabilitySmartDNSFailover = "smartdns-failover"` (next to `CapabilitySmartDNSChecks`).
 
 ## 7. Compatibility
@@ -128,7 +130,7 @@ Hosting tenants' VPN exits on shared nodes also needs the per-exit routing table
 - Unit (`internal/smartdns`, with the existing fake `exitClient`): order and failover, stickiness, failback after `failback_after`, a flapping primary that never stays healthy long enough to fail back, all exits down gives SERVFAIL, retry on `ExitDown` but not on other refusals, no retry after bytes were sent, cache entries never crossing exits.
 - Config (`pkg/config`): `exit`/`exits` exclusivity, country mismatch, duplicates, list length, normalisation.
 - Panel: migration backfill, compiler output with and without the capability, validation errors and warnings.
-- netns e2e: extend `test/netns/smartdns-vpn-exits-e2e.sh` with two exit nodes, each with a simulated provider: take down provider A and check that new connections leave through B within the expected time and that a client never gets an answer through another country; bring A back and check failback only after `failback_after`; kill node B's mesh link while A is down and check SERVFAIL.
+- netns e2e: `test/netns/smartdns-exit-failover-e2e.sh` (a new suite rather than an extension of `smartdns-vpn-exits`, which tests one node): a home node and two exit nodes, each with a simulated provider. It takes down provider A (by deleting exit node A's VPN interface, which its exit health reports at once; a silently dead provider is only seen after the 3-minute handshake window) and checks that new connections leave through B within seconds and only ever through the two listed exits, that a mixed-country list is rejected, that A coming back keeps B until `failback_after` and then fails back, and that killing node B's mesh link while A is down gives SERVFAIL with nothing leaked.
 
 ## 11. Open questions
 
