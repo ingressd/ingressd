@@ -16,6 +16,7 @@ func TestJoinRoundTrip(t *testing.T) {
 		{URL: "https://edge.example.com", Token: "abc123"},
 		{URL: "https://edge.example.com:8443", Token: "abc123", CA: testPEM},
 		{URL: "https://a.example.com", Token: "abc123", Edges: []JoinEdge{{URL: "https://a.example.com"}, {URL: "https://b.example.com", CA: testPEM}}},
+		{URL: "https://a.example.com", Edges: []JoinEdge{{URL: "https://a.example.com", T: "ta"}, {URL: "https://b.example.com", T: "tb"}}},
 	} {
 		s, err := EncodeJoin(j)
 		if err != nil {
@@ -65,6 +66,7 @@ func TestJoinInvalid(t *testing.T) {
 		"http url":    enc(`{"u":"http://edge.example.com","t":"x"}`),
 		"bad ca":      enc(`{"u":"https://edge.example.com","t":"x","ca":"nope"}`),
 		"bad 2nd url": enc(`{"e":[{"u":"https://a.example.com"},{"u":"ftp://b"}],"t":"x"}`),
+		"2nd no token": enc(`{"e":[{"u":"https://a.example.com","t":"x"},{"u":"https://b.example.com"}]}`),
 	} {
 		if _, err := DecodeJoin(s); err == nil {
 			t.Errorf("%s: DecodeJoin(%q) succeeded", name, s)
@@ -79,3 +81,17 @@ func TestJoinInvalid(t *testing.T) {
 }
 
 func b64(s string) string { return base64.URLEncoding.EncodeToString([]byte(s)) }
+
+func TestJoinEdgeTokens(t *testing.T) {
+	j, err := DecodeJoin(b64(`{"e":[{"u":"https://a.example.com","t":"ta"},{"u":"https://b.example.com","t":"tb"},{"u":"https://c.example.com"}],"t":"top"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := j.All()
+	if len(all) != 3 || all[0].T != "ta" || all[1].T != "tb" || all[2].T != "" || j.Token != "top" {
+		t.Errorf("All() = %+v, token %q", all, j.Token)
+	}
+	if _, err := DecodeJoin(b64(`{"e":[{"u":"https://a.example.com","t":"ta"},{"u":"https://b.example.com","t":"tb"}]}`)); err != nil {
+		t.Errorf("per-edge tokens without a top-level token: %v", err)
+	}
+}

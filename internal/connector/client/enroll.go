@@ -59,7 +59,11 @@ func Enroll(ctx context.Context, statePath string, o EnrollOptions) (*State, err
 		if i == 0 {
 			es.Addr, es.CAFile = o.EdgeAddr, o.CAFile
 		}
-		er, err := enrollWith(ctx, es, o.Token, key)
+		token := je.T
+		if token == "" {
+			token = o.Token
+		}
+		er, err := enrollWith(ctx, es, token, key)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -124,6 +128,9 @@ func (o *EnrollOptions) ApplyJoin(joinString string) error {
 	}
 	all := j.All()
 	o.EdgeURL, o.Token = all[0].URL, j.Token
+	if all[0].T != "" {
+		o.Token = all[0].T
+	}
 	if o.CAFile == "" {
 		o.CAPEM = all[0].CA
 	}
