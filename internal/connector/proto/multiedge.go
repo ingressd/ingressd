@@ -39,6 +39,11 @@ type Sibling struct {
 	EdgeAddress string `json:"edge_address"`
 	// WSURL is that edge's WireGuard-over-WebSocket URL ("" = no fallback).
 	WSURL string `json:"ws_url,omitempty"`
+	// Priority orders edges when the connector picks one (lower first,
+	// then lower RTT); PoP names the edge's point of presence. Both are
+	// informational for older connectors.
+	Priority int    `json:"priority,omitempty"`
+	PoP      string `json:"pop,omitempty"`
 }
 
 // KeyAuthScheme authenticates a connector to an edge it never enrolled

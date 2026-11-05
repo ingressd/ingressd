@@ -63,6 +63,9 @@ func (c *Config) validateSiblings(v *validator) {
 				v.add(sp+".edge_public_key", "is listed twice")
 			}
 			keys[s.EdgePublicKey] = true
+			if s.Priority < 0 {
+				v.add(sp+".priority", "must not be negative, got %d", s.Priority)
+			}
 			if s.WSURL != "" {
 				if u, err := url.Parse(s.WSURL); err != nil || (u.Scheme != "wss" && u.Scheme != "ws") || u.Hostname() == "" {
 					v.add(sp+".ws_url", "must be a wss:// URL, got %q", s.WSURL)
