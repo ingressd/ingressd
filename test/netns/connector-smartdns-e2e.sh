@@ -144,7 +144,7 @@ expect "connector enrolls" "Enrolled tunnel \"cloud\"" conn enroll "$JOIN" --edg
 ip netns exec "$SITE" env INGRESSD_SMARTDNS_TRACE_URL=$TRACE INGRESSD_SMARTDNS_PROBE_ADDR=192.0.2.10:443 \
 	"$BIN/ingressd-connector" --state "$STATE" run --udp-timeout 5s >"$TMP/conn.log" 2>&1 &
 PIDS+=($!)
-wait_for "connector up over UDP" "Transport: udp" 20 bash -c "ip netns exec $SITE $BIN/ingressd-connector --state $STATE status"
+wait_for "connector up over UDP" "Transport: udp" 20 bash -c "ip netns exec $SITE $BIN/ingressd-connector --state $STATE status | tr -s ' '"
 wait_for "connector created its age key" "age_identity" 20 cat "$STATE"
 wait_for "edge learns the connector's age recipient" "age1" 60 cat "$TMP/state/connector.json"
 wait_for "connector learns the edge's node name" '"node": "ams1"' 60 cat "$STATE"

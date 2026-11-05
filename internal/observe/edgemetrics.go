@@ -50,7 +50,7 @@ func (w *MetricsWindow) add(e Entry) {
 	w.Seen++
 	if len(w.Latencies) < maxLatencySamples {
 		w.Latencies = append(w.Latencies, e.Duration)
-	} else if i := rand.Int64N(w.Seen); i < maxLatencySamples {
+	} else if i := rand.Int64N(w.Seen); i < maxLatencySamples { //nolint:gosec // G404: reservoir sampling, not security
 		w.Latencies[i] = e.Duration
 	}
 	if w.Hosts == nil {

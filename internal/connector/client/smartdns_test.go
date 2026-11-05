@@ -179,7 +179,7 @@ func TestSmartDNSDecryptVPN(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		io.WriteString(ew, "[Interface]\nPrivateKey = x\n")
+		_, _ = io.WriteString(ew, "[Interface]\nPrivateKey = x\n")
 		ew.Close()
 		if aw != nil {
 			aw.Close()

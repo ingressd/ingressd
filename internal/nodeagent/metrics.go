@@ -71,7 +71,7 @@ type sysReader struct {
 func (r *sysReader) read(now time.Time) *rawSample {
 	s := &rawSample{at: now, cores: runtime.NumCPU()}
 	if u, err := alerts.DiskUsage(r.stateDir); err == nil {
-		s.diskFree, s.diskTotal = int64(u.Free), int64(u.Total)
+		s.diskFree, s.diskTotal = int64(u.Free), int64(u.Total) //nolint:gosec // G115: disk sizes are far below 2^63
 	}
 	if r.root == "" {
 		return s
@@ -243,7 +243,7 @@ func diff(prev, cur *rawSample, edge *observe.MetricsWindow, tun *nodeproto.Tunn
 			role:  role,
 			rxBps: float64(d.rxBytes*8) / dt, txBps: float64(d.txBytes*8) / dt,
 			rxPps: float64(d.rxPackets) / dt, txPps: float64(d.txPackets) / dt,
-			drops: int64(d.rxDrop + d.txDrop), errs: int64(d.rxErrs + d.txErrs),
+			drops: int64(d.rxDrop + d.txDrop), errs: int64(d.rxErrs + d.txErrs), //nolint:gosec // G115: counter deltas are far below 2^63
 		}
 	}
 	both := func(name string) (ifCounters, bool) {

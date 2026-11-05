@@ -405,7 +405,7 @@ func writeStatusFile(path string, v any) {
 	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o640); err == nil {
-		os.Rename(tmp, path)
+		_ = os.Rename(tmp, path)
 	}
 }
 

@@ -50,7 +50,9 @@ func renderForward(t *testing.T, y string) (*Plan, map[string]any) {
 	}
 	st := secrets.NewMemory(map[string]string{config.MeshKeySecret: "MESH-PRIV", "forward-hop": forwardSecret})
 	for k, v := range realmSecrets {
-		st.Set(k, v)
+		if err := st.Set(k, v); err != nil {
+			t.Fatal(err)
+		}
 	}
 	p, err := Render(cfg, st, fakeKeys{}, Options{AdminListen: "unix//run/ingressd/caddy-admin.sock", AccessLogSocket: "/run/ingressd/access.sock"})
 	if err != nil {

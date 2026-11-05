@@ -198,7 +198,7 @@ func pipe(a, b net.Conn, count counterAdder) {
 	done := make(chan struct{}, 2)
 	cp := func(dst, src net.Conn) {
 		if count == nil {
-			io.Copy(dst, src)
+			_, _ = io.Copy(dst, src)
 		} else {
 			buf := make([]byte, relayBuf)
 			for {

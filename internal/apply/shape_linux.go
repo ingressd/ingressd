@@ -130,11 +130,11 @@ func ensureHTB(link netlink.Link, rateMbit int) error {
 		}
 		haveLeaf = false
 	}
-	bits := uint64(rateMbit) * 1_000_000
+	bits := uint64(rateMbit) * 1_000_000 //nolint:gosec // G115: rate_mbit is validated to 1-100000
 	bytes := bits / 8
 	// A 10 ms burst (at least 32 KiB) keeps virtual devices that send in
 	// bursts from being held well below the rate.
-	burst := uint32(max(bytes/100, 32<<10))
+	burst := uint32(max(bytes/100, 32<<10)) //nolint:gosec // G115: bytes/100 of a rate capped at 100000 Mbit/s fits in uint32
 	quantum := uint32(min(max(bytes/10, 1600), 200000))
 	class := netlink.NewHtbClass(
 		netlink.ClassAttrs{LinkIndex: idx, Parent: htbRoot, Handle: htbClass},

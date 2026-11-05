@@ -27,10 +27,12 @@ build-edge:
 	cd edge && $(GO) build -trimpath -ldflags '-s -w' -o ../$(BIN)/ingressd-edge ./cmd/ingressd-edge
 
 # Everything the netns e2e suites run: the binaries plus the test-only fake
-# panel (managed-node) and Smart DNS helper (smartdns).
+# panel (managed-node), the Smart DNS helper (connector-smartdns) and the
+# realms helper (realms).
 build-e2e: build
 	$(GO) build -o $(BIN)/fakepanel ./test/fakepanel/cmd/fakepanel
 	$(GO) build -o $(BIN)/ingressd-sdtool ./test/netns/sdtool
+	$(GO) build -o $(BIN)/realmtool ./test/netns/realmtool
 	$(GO) build -o $(BIN)/fakeidp ./test/fakeidp/cmd/fakeidp
 	$(GO) build -tags idptest -o $(BIN)/ingressd-idptest ./cmd/ingressd
 

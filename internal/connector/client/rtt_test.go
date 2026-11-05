@@ -110,7 +110,7 @@ func rttSession(t *testing.T) (*session, []*edge, *fakeLink) {
 		keys = append(keys, k.PublicKey())
 	}
 	sib := func(i, prio int, pop string) proto.Sibling {
-		return proto.Sibling{Node: string(rune('A' + i)), EdgePublicKey: keys[i].String(), Priority: prio, PoP: pop}
+		return proto.Sibling{Node: string(rune('A' + i)), EdgePublicKey: keys[i].String(), Priority: prio, PoP: pop} //nolint:gosec // G115: i is a small test index
 	}
 	st := &State{}
 	for i, k := range keys {

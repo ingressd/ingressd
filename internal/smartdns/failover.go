@@ -164,7 +164,7 @@ func (a *activeExit) reasonLocked(exits []string, up []bool, why []string, cur i
 // status follow health even while a service has no traffic.
 func (m *Manager) refreshActive(st *state) {
 	for _, r := range st.allRoutes() {
-		m.pick(st, r)
+		_, _ = m.pick(st, r)
 	}
 }
 

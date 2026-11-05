@@ -197,7 +197,7 @@ func (s *ExitServer) listenAPI(addr string) (io.Closer, error) {
 			return context.WithValue(ctx, connAddrsKey{}, [2]netip.Addr{netAddr(c.LocalAddr()), netAddr(c.RemoteAddr())})
 		},
 	}
-	go srv.Serve(ln)
+	go func() { _ = srv.Serve(ln) }()
 	return closerFunc(srv.Close), nil
 }
 
@@ -226,7 +226,7 @@ func (s *ExitServer) resolveHandler(w http.ResponseWriter, r *http.Request) {
 		resp = resolveVia(r.Context(), e, s.edges, normalize(req.Name))
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *ExitServer) exitHandler(w http.ResponseWriter, _ *http.Request) {
@@ -237,7 +237,7 @@ func (s *ExitServer) exitHandler(w http.ResponseWriter, _ *http.Request) {
 		out = exitState{Up: up, Country: es.Country, Egress: es.Egress, Error: msg}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(out)
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 func (s *ExitServer) listenRelay(addr string) (io.Closer, error) {
@@ -257,13 +257,13 @@ func (s *ExitServer) handleRelay(c net.Conn) {
 		s.refused.Add(1)
 		return
 	}
-	c.SetDeadline(time.Now().Add(peekTimeout))
+	_ = c.SetDeadline(time.Now().Add(peekTimeout))
 	req, err := ReadConnectRequest(c)
 	if err != nil {
 		return
 	}
 	refuse := func(msg string, exitDown bool) {
-		WriteConnectResponse(c, ConnectResponse{Error: msg, ExitDown: exitDown})
+		_ = WriteConnectResponse(c, ConnectResponse{Error: msg, ExitDown: exitDown})
 		s.log.Warn("exit relay refused", "site", site, "host", req.Host, "reason", msg)
 	}
 	e := s.state().egress
@@ -286,7 +286,7 @@ func (s *ExitServer) handleRelay(c net.Conn) {
 	if err := WriteConnectResponse(c, ConnectResponse{OK: true, Addr: addr.String()}); err != nil {
 		return
 	}
-	c.SetDeadline(time.Time{})
+	_ = c.SetDeadline(time.Time{})
 	pipe(c, up, nil)
 }
 

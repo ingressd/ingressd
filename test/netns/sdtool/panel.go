@@ -30,7 +30,7 @@ type connectorState struct {
 }
 
 func readState(path string) connectorState {
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nolint:gosec // G703: test tool reading the file it is given
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func seal(args []string) {
 	if err != nil {
 		log.Fatalf("connector has no age identity yet: %v", err)
 	}
-	in, err := os.ReadFile(args[1])
+	in, err := os.ReadFile(args[1]) //nolint:gosec // G703: test tool reading the file it is given
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -67,7 +67,9 @@ func seal(args []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	w.Write(in)
+	if _, err := w.Write(in); err != nil {
+		log.Fatal(err)
+	}
 	w.Close()
 	aw.Close()
 	fmt.Print(buf.String())
@@ -81,7 +83,7 @@ func sign(args []string) {
 	seed := fs.String("seed", "", "64 hex characters: the org key seed")
 	connector := fs.String("connector", "", "connector WireGuard public key")
 	issued := fs.String("issued", "", "issue time (RFC 3339)")
-	fs.Parse(args)
+	_ = fs.Parse(args) // ExitOnError
 	sb, err := hex.DecodeString(*seed)
 	if err != nil || len(sb) != ed25519.SeedSize {
 		log.Fatal("-seed must be 64 hex characters")

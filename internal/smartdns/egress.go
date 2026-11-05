@@ -148,7 +148,7 @@ func exchangeOne(ctx context.Context, dial DialFunc, network, server string, q *
 	}
 	defer c.Close()
 	if dl, ok := ctx.Deadline(); ok {
-		c.SetDeadline(dl)
+		_ = c.SetDeadline(dl)
 	}
 	cl := &dns.Client{Net: "tcp", Timeout: dnsTimeout}
 	if network == "udp4" {

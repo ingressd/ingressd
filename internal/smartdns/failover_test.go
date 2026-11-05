@@ -260,7 +260,7 @@ func relayExits(t *testing.T, m *Manager, fx *fakeExits, connect func(req Connec
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { c.Close() })
+	t.Cleanup(func() { _ = c.Close() })
 	return c.(net.Listener).Addr().String(), func() []ConnectRequest {
 		mu.Lock()
 		defer mu.Unlock()
@@ -273,7 +273,7 @@ func echoConn() net.Conn {
 	go func() {
 		defer b.Close()
 		line, _ := bufio.NewReader(b).ReadString('\n')
-		io.WriteString(b, "echo "+line)
+		_, _ = io.WriteString(b, "echo "+line)
 	}()
 	return a
 }
@@ -285,8 +285,8 @@ func relayGet(t *testing.T, addr, host string) string {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	io.WriteString(conn, "GET /x HTTP/1.1\r\nHost: "+host+"\r\n\r\n")
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, _ = io.WriteString(conn, "GET /x HTTP/1.1\r\nHost: "+host+"\r\n\r\n")
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	b, _ := io.ReadAll(conn)
 	return string(b)
 }
@@ -368,7 +368,7 @@ func TestRelayNoRetryAfterBytesSent(t *testing.T) {
 	m, fx, _ := newFailoverManager(t)
 	addr, connects := relayExits(t, m, fx, func(req ConnectRequest) (net.Conn, error) {
 		a, b := net.Pipe()
-		b.Close() // the stream dies as the client's first bytes go up
+		_ = b.Close() // the stream dies as the client's first bytes go up
 		return a, nil
 	})
 	if got := relayGet(t, addr, "www.bbc.example"); got != "" {

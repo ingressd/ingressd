@@ -158,7 +158,7 @@ func relayVia(t *testing.T, s *ExitServer, remote netip.Addr, req ConnectRequest
 	defer a.Close()
 	local := net.TCPAddrFromAddrPort(netip.AddrPortFrom(siteEdge, 51902))
 	go s.handleRelay(addrConn{b, local, net.TCPAddrFromAddrPort(netip.AddrPortFrom(remote, 40000))})
-	a.SetDeadline(time.Now().Add(3 * time.Second))
+	_ = a.SetDeadline(time.Now().Add(3 * time.Second))
 	if err := WriteConnectRequest(a, req); err != nil {
 		return ConnectResponse{}, err
 	}
