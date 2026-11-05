@@ -286,13 +286,19 @@ func statusSignature(s nodeproto.Status) string {
 		if u := t.ConnectorUpdate; u != nil {
 			v += "/" + u.ID + "/" + u.State
 		}
+		// A connector's Smart DNS change reaches the panel on the next poll,
+		// so an exit coming up shows within seconds.
+		if sd := t.ConnectorSmartDNS; sd != nil {
+			b, _ := json.Marshal(sd)
+			v += "/" + string(b)
+		}
 		sig.T = append(sig.T, tun{t.Site, t.Up, t.Transport, v})
 	}
 	for _, c := range s.Certs {
 		sig.Certs = append(sig.Certs, c.Host+"="+c.State)
 	}
 	for _, e := range s.Exits {
-		sig.E = append(sig.E, ex{e.Name, e.Up})
+		sig.E = append(sig.E, ex{e.Name + "/" + e.Egress + "/" + e.Country, e.Up})
 	}
 	for _, m := range s.Mesh {
 		sig.M = append(sig.M, ex{m.NodeID, m.Up})

@@ -212,3 +212,32 @@ type nopCloser struct{ io.Writer }
 func (nopCloser) Close() error { return nil }
 
 func b64(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
+
+func TestSmartDNSChangeIsReportedAtOnce(t *testing.T) {
+	c, s := newTestController(t)
+	e := &edge{s: s, cfg: s.st.Edges[0], kick: make(chan struct{}, 1)}
+	s.mu.Lock()
+	s.edges = map[wgtypes.Key]*edge{{}: e}
+	s.mu.Unlock()
+	kicked := func() bool {
+		select {
+		case <-e.kick:
+			return true
+		default:
+			return false
+		}
+	}
+	last := c.reportIfChanged("")
+	if !kicked() {
+		t.Fatal("first state not reported")
+	}
+	if last = c.reportIfChanged(last); kicked() {
+		t.Fatal("reported without a change")
+	}
+	_, key, _ := ed25519.GenerateKey(nil)
+	setBlob(s, signedSite(t, key, s.priv.PublicKey().String(), time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC), nodeExitSite()))
+	c.update()
+	if c.reportIfChanged(last); !kicked() {
+		t.Fatal("new config not reported")
+	}
+}

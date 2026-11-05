@@ -72,6 +72,7 @@ func newSDController(ctx context.Context, statePath string, log *slog.Logger) *s
 		},
 	})
 	go c.mgr.Run(ctx)
+	go c.watch(ctx)
 	return c
 }
 
@@ -449,4 +450,45 @@ func (v *vpnExit) dnsServers(upstream []string) []string {
 func (v *vpnExit) sigHash() string {
 	sum := sha256.Sum256([]byte(v.sig))
 	return hex.EncodeToString(sum[:8])
+}
+
+// smartDNSWatchEvery is how often the state is compared with what the
+// edges last heard: a change is reported at once, not on the next 30 s
+// report, so the panel shows an exit coming up within seconds.
+const smartDNSWatchEvery = 2 * time.Second
+
+func (c *sdController) watch(ctx context.Context) {
+	t := time.NewTicker(smartDNSWatchEvery)
+	defer t.Stop()
+	last := ""
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		last = c.reportIfChanged(last)
+	}
+}
+
+// reportIfChanged kicks every edge's reporter when the state differs from
+// last, and returns the state's fingerprint.
+func (c *sdController) reportIfChanged(last string) string {
+	r := c.report()
+	r.Recent = nil
+	b, err := json.Marshal(r)
+	if err != nil || string(b) == last {
+		return last
+	}
+	if s := c.session(); s != nil {
+		s.mu.Lock()
+		for _, e := range s.edges {
+			select {
+			case e.kick <- struct{}{}:
+			default:
+			}
+		}
+		s.mu.Unlock()
+	}
+	return string(b)
 }
