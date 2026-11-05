@@ -137,6 +137,8 @@ type Hello struct {
 	Capabilities    []string `json:"capabilities,omitempty"` // e.g. "smartdns", "mesh", "l4"
 	AppliedRevision int64    `json:"applied_revision"`
 	UsageSeq        int64    `json:"usage_seq"` // last usage seq the node sent
+	// MetricsSeq is the last metrics seq the node produced (additive).
+	MetricsSeq int64 `json:"metrics_seq,omitempty"`
 	// MeshPublicKey is the node's WireGuard key for the org mesh (generated
 	// and kept on the node); the panel distributes it to the other nodes.
 	MeshPublicKey string `json:"mesh_public_key,omitempty"`
