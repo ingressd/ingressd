@@ -129,8 +129,8 @@ func TunnelRulePriority(table int) int { return RulePriorityBase + table - Table
 func Render(cfg *config.Config, res Resolver, keys Keys, opts Options) (*Plan, error) {
 	// An app may otherwise take over the machine host (see controlHosts),
 	// and with realms that would hand one tenant the node's own endpoints.
-	if len(cfg.Realms) > 0 && opts.MachineHost != "" && appHost(cfg, opts.MachineHost) {
-		return nil, fmt.Errorf("an app claims the node's machine host %s, which realms may not", opts.MachineHost)
+	if m := machineHost(cfg, opts); len(cfg.Realms) > 0 && m != "" && appHost(cfg, m) {
+		return nil, fmt.Errorf("an app claims the node's machine host %s, which realms may not", m)
 	}
 	net, err := renderNetwork(cfg, keys)
 	if err != nil {

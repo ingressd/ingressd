@@ -163,6 +163,33 @@ func TestRealmMissingKeyFails(t *testing.T) {
 	}
 }
 
+// Without an enrolment endpoint a realms node serves its machine endpoints
+// (the control plane's machine host mux) on its public IPv4, with an
+// internal-CA certificate, since realms refuse the admin hostname.
+func TestRealmMachineHostFallback(t *testing.T) {
+	_, p := renderRealms(t)
+	var dial string
+	walk(hostRoutes(t, p)["203.0.113.10"], func(o map[string]any) {
+		if o["handler"] == "reverse_proxy" {
+			dial = o["upstreams"].([]any)[0].(map[string]any)["dial"].(string)
+		}
+	})
+	if dial != "unix//run/ingressd/control.sock" {
+		t.Errorf("public IPv4 not routed to the control plane: %q", dial)
+	}
+	var internalIP bool
+	var root map[string]any
+	_ = json.Unmarshal(p.Caddy, &root)
+	walk(root, func(o map[string]any) {
+		if s, ok := o["subjects"].([]any); ok && len(s) == 1 && s[0] == "203.0.113.10" {
+			internalIP = true
+		}
+	})
+	if !internalIP {
+		t.Error("no internal-CA policy for the public IPv4")
+	}
+}
+
 func TestRealmAppCannotClaimMachineHost(t *testing.T) {
 	cfg, _ := renderRealms(t)
 	if _, err := Render(cfg, secrets.NewMemory(realmSecrets), fakeKeys{}, Options{MachineHost: "NAS.alice.example"}); err == nil {
