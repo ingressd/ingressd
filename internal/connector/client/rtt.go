@@ -48,7 +48,12 @@ func (e *ewma) value() time.Duration {
 
 func (e *ewma) reset() { *e = ewma{} }
 
-func millis(d time.Duration) float64 { return math.Round(float64(d.Microseconds())/10) / 100 }
+func millis(d time.Duration) float64 {
+	if d <= 0 {
+		return 0
+	}
+	return max(math.Round(float64(d.Microseconds())/10)/100, 0.01)
+}
 
 // rttLoop measures the edge's RTT while its tunnel is up.
 func (e *edge) rttLoop(ctx context.Context) {
@@ -75,7 +80,7 @@ func (e *edge) measureRTT(ctx context.Context) bool {
 	defer cancel()
 	start := time.Now()
 	c, err := e.s.link.DialTunnel(dctx, net.JoinHostPort(addr, strconv.Itoa(proto.TunnelControlPort)))
-	d := time.Since(start)
+	d := max(time.Since(start), time.Microsecond) // 0 means unmeasured
 	if err != nil {
 		return false
 	}
