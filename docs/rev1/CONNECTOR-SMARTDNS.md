@@ -37,6 +37,7 @@ and the edge is no longer in the path of a connector exit at all.
 | Exit locations | `connector`: the site's own connector, through a VPN config. `node`: one of the org's **self-hosted** nodes, egressing from **that node's own public IP** (route a domain out through your Amsterdam VPS without paying for a VPN). Managed nodes never host exits |
 | VPNs | Terminate **only on the connector**. Nodes run no VPN interfaces, hold no VPN configs and have no exit routing tables; that node code is removed |
 | Exit location kind `operator` | Reserved in the schema, refused by validation. Not offered |
+| Plans | Free in every plan: Smart DNS uses no operator infrastructure, so there is no add-on |
 | Failover | Kept: ordered exits (1–4, one country), sticky, `failback_after`, fail closed (EXIT-FAILOVER.md semantics), now evaluated by the connector |
 | Hosting modes | Independent of Smart DNS. A self, hybrid or managed origin keeps Smart DNS when its edges change; connector exits are unaffected by any edge failure |
 | Config trust | Smart DNS config is signed by the org key and VPN configs are encrypted to the connector; edges (self-hosted or managed) only pass it through and can neither read nor change it |
@@ -175,6 +176,5 @@ Connector:
 
 ## 8. Open questions
 
-1. Should Smart DNS be available to Free (self-hosted) orgs now that the operator carries no traffic, with the add-on gating only the managed catalog and monitoring? (MANAGED.md §7.1.)
-2. Use kernel WireGuard for connector exits in TUN mode on Linux (faster) or keep one netstack path everywhere (simpler)? Decide after the benchmark.
-3. Is one listen address per site enough, or do some homes need one per VLAN?
+1. Use kernel WireGuard for connector exits in TUN mode on Linux (faster) or keep one netstack path everywhere (simpler)? Decide after the benchmark.
+2. Is one listen address per site enough, or do some homes need one per VLAN?
