@@ -74,7 +74,7 @@ if [[ $BUILD == 1 ]]; then
 	# only relinks. Test helpers (fakepanel, sdtool, fakeidp and the
 	# idptest build of ingressd for access-idp) are tiny.
 	(go build -o "$BIN/" ./cmd/... && go build -o "$BIN/fakepanel" ./test/fakepanel/cmd/fakepanel &&
-		go build -o "$BIN/ingressd-sdtool" ./test/netns/sdtool && go build -o "$BIN/fakeidp" ./test/fakeidp/cmd/fakeidp &&
+		go build -o "$BIN/ingressd-sdtool" ./test/netns/sdtool && go build -o "$BIN/realmtool" ./test/netns/realmtool && go build -o "$BIN/fakeidp" ./test/fakeidp/cmd/fakeidp &&
 		go build -tags idptest -o "$BIN/ingressd-idptest" ./cmd/ingressd) >"${TMPDIR:-/tmp}/e2e-build-$$.log" 2>&1 &
 	b1=$!
 	(cd edge && go build -o "$BIN/ingressd-edge" ./cmd/ingressd-edge) >"${TMPDIR:-/tmp}/e2e-build-edge-$$.log" 2>&1 &

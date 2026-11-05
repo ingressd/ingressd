@@ -65,6 +65,7 @@ test/netns/realms-e2e.sh                 realms
 
 # --- Test helpers ---------------------------------------------------------------
 test/netns/sdtool/*               smartdns smartdns-vpn-exits
+test/netns/realmtool/*            realms
 test/fakepanel/*                  managed-node remote-updates
 scripts/releasetool/*             remote-updates
 
