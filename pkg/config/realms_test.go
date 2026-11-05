@@ -55,6 +55,12 @@ func TestRealmsValid(t *testing.T) {
 	if got := c.TunnelTable("tb4x9p01"); got != 1202 {
 		t.Errorf("TunnelTable = %d, want 1202", got)
 	}
+	if got := c.MachineHostFallback(); got != "203.0.113.10" {
+		t.Errorf("MachineHostFallback = %q, want the public IPv4", got)
+	}
+	if got := mustParse(t, baseYAML).MachineHostFallback(); got != "" {
+		t.Errorf("MachineHostFallback without realms = %q", got)
+	}
 }
 
 func TestRealmsValidation(t *testing.T) {
@@ -147,6 +153,8 @@ func TestRealmsValidation(t *testing.T) {
 			"edge.admin.ip_allowlist: is not allowed alongside realms"},
 		{"top-level access refused", func(c *Config) { c.Access = &Access{}; defaultAccess(c.Access) },
 			"access: is not allowed alongside realms"},
+		{"open tunnel input refused", func(c *Config) { c.Security.TunnelInput = "" },
+			"security.tunnel_input: must be restricted alongside realms"},
 		{"smartdns refused", func(c *Config) { c.SmartDNS = &SmartDNS{} },
 			"smartdns: is not supported alongside realms yet"},
 		{"protected app needs realm access", func(c *Config) { c.Realms["tq7k2m"] = Realm{} },
@@ -295,9 +303,26 @@ func TestTunnelInput(t *testing.T) {
 	}
 	c = mustParse(t, baseYAML)
 	a := c.Apps["web"]
-	a.Security = &Security{TunnelInput: TunnelInputRestricted}
+	a.Security = &Security{TunnelInput: TunnelInputRestricted, EdgeOutputDeny: []string{"10.0.0.0/8"}}
 	c.Apps["web"] = a
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "apps.web.security.tunnel_input: is node-wide") {
-		t.Errorf("app-level tunnel_input: %v", err)
+	err := c.Validate()
+	if err == nil || !strings.Contains(err.Error(), "apps.web.security.tunnel_input: is node-wide") ||
+		!strings.Contains(err.Error(), "apps.web.security.edge_output_deny: is node-wide") {
+		t.Errorf("app-level tunnel_input and edge_output_deny: %v", err)
+	}
+}
+
+func TestEdgeOutputDeny(t *testing.T) {
+	ok := mustParse(t, baseYAML+"security: { tunnel_input: restricted, edge_output_deny: [10.1.0.0/16, \"fd12:3456::/48\"] }\n")
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("valid denylist: %v", err)
+	}
+	for _, tt := range []struct{ yaml, want string }{
+		{"security: { tunnel_input: restricted, edge_output_deny: [10.1.0.0] }\n", `security.edge_output_deny[0]: invalid CIDR "10.1.0.0"`},
+		{"security: { edge_output_deny: [10.1.0.0/16] }\n", "security.edge_output_deny: only applies with tunnel_input: restricted"},
+	} {
+		if err := mustParse(t, baseYAML+tt.yaml).Validate(); err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("Validate = %v, want %q", err, tt.want)
+		}
 	}
 }

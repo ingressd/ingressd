@@ -47,6 +47,17 @@ func (c *Config) AppAccess(app string) *Access {
 	return c.Access
 }
 
+// MachineHostFallback is where a node with realms serves its machine
+// endpoints (connector enrolment, polling, WebSocket fallback) when it has
+// no enrolment endpoint: realms refuse edge.admin.hostname, so it is the
+// public IPv4. Configs without realms keep the admin hostname and return "".
+func (c *Config) MachineHostFallback() string {
+	if len(c.Realms) == 0 {
+		return ""
+	}
+	return c.Edge.PublicIPv4
+}
+
 func (c *Config) applyRealmDefaults() {
 	for _, r := range c.Realms {
 		if r.Access != nil {
@@ -102,6 +113,9 @@ func (c *Config) validateRealms(v *validator) {
 	}
 	if c.SmartDNS != nil {
 		v.add("smartdns", "is not supported alongside realms yet")
+	}
+	if !c.TunnelInputRestricted() {
+		v.add("security.tunnel_input", "must be restricted alongside realms (open input lets every realm's sites reach the proxy and SSH through their tunnels)")
 	}
 
 	for _, name := range sortedKeys(c.Realms) {

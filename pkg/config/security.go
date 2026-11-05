@@ -129,6 +129,10 @@ type Security struct {
 	// TunnelInput (top-level only) is what sites may reach on the edge
 	// itself through their tunnels: open (default) or restricted.
 	TunnelInput string `yaml:"tunnel_input,omitempty"`
+	// EdgeOutputDeny (top-level only, restricted mode) adds IPv4/IPv6
+	// networks the proxy may not connect to, e.g. a provider's private
+	// network, to the built-in metadata and mesh denylist.
+	EdgeOutputDeny []string `yaml:"edge_output_deny,omitempty"`
 }
 
 type GeoIP struct {
@@ -280,6 +284,14 @@ func (c *Config) validateSecurity(v *validator) {
 	default:
 		v.add("security.tunnel_input", "must be open or restricted, got %q", c.Security.TunnelInput)
 	}
+	for i, s := range c.Security.EdgeOutputDeny {
+		if _, err := netip.ParsePrefix(s); err != nil {
+			v.add(fmt.Sprintf("security.edge_output_deny[%d]", i), "invalid CIDR %q", s)
+		}
+	}
+	if len(c.Security.EdgeOutputDeny) > 0 && !c.TunnelInputRestricted() {
+		v.add("security.edge_output_deny", "only applies with tunnel_input: restricted")
+	}
 	if g := c.Edge.GeoIP; g != nil {
 		if g.MaxMindAccountID == "" {
 			v.add("edge.geoip.maxmind_account_id", "is required")
@@ -309,6 +321,9 @@ func (c *Config) validateSecurity(v *validator) {
 			c.validateSecurityRules(v, p+".security", a.Security)
 			if a.Security.TunnelInput != "" {
 				v.add(p+".security.tunnel_input", "is node-wide; set it in the top-level security block")
+			}
+			if len(a.Security.EdgeOutputDeny) > 0 {
+				v.add(p+".security.edge_output_deny", "is node-wide; set it in the top-level security block")
 			}
 		}
 		if w := a.WAF; w != nil {

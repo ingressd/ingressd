@@ -21,6 +21,7 @@ import (
 const realmsAuthConfig = `
 version: 1
 edge: { acme: { ca: internal } }
+security: { tunnel_input: restricted }
 realms:
   ra:
     access: { portal_url: https://auth.ingressd.test/a/ra, session_key: secret://ra_session, jwt_key: secret://ra_jwt, revoked_before: { "alice@example.com": "2020-01-01T00:00:00Z" } }
