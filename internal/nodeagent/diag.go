@@ -158,7 +158,7 @@ func DiagnoseOrigin(ctx context.Context, cfg *config.Config, appName string, tim
 		// service, so a timeout is never the router's VPN firewall zone.
 		var ne net.Error
 		if t, ok := cfg.Tunnels[tun]; ok && t.Site == config.SiteConnector && (errors.As(err, &ne) && ne.Timeout() || errors.Is(err, context.DeadlineExceeded)) {
-			msg = "no reply to the connection attempt: the tunnel is up, so the connector's machine could not reach the service (check the address and port, that the service listens on the LAN and not only on localhost, and any firewall between the connector's machine and the service)"
+			msg = "no reply to the connection attempt: the tunnel is up, so the connector's machine could not reach the service or its replies did not come back (a tun-mode connector that is not the LAN's router needs masquerade on: see 'ingressd-connector status'; also check the address and port, that the service listens on the LAN and not only on localhost, and firewalls between the connector's machine and the service)"
 		}
 		s.end("connect", false, "%s: %v", dial, err)
 		return s.result(code, "%s", msg)

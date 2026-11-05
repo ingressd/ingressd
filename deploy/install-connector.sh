@@ -29,6 +29,7 @@
 #   --mode MODE       tun or netstack (default: tun as root on Linux, else netstack)
 #   --edge-addr IP    dial this address instead of resolving the edge hostname
 #   --no-discovery    never scan the LAN for services
+#   --no-masquerade   tun mode on the LAN's router itself: forward without masquerading
 #   --no-service      install and enrol, but do not install/start a service
 #   --reenroll        enrol again even if this host is already enrolled
 #   --prefix DIR      binary directory (default /usr/local/bin, or ~/.local/bin)
@@ -49,6 +50,7 @@ IMAGE=${INGRESSD_CONNECTOR_IMAGE:-${HOMEEDGE_CONNECTOR_IMAGE:-ghcr.io/ingressd/i
 MODE=""
 EDGE_ADDR=""
 NO_DISCOVERY=0
+NO_MASQ=0
 NO_SERVICE=0
 REENROLL=0
 PREFIX=""
@@ -70,6 +72,7 @@ while [ $# -gt 0 ]; do
 	--mode) need_arg "$@"; MODE=$2; shift 2 ;;
 	--edge-addr) need_arg "$@"; EDGE_ADDR=$2; shift 2 ;;
 	--no-discovery) NO_DISCOVERY=1; shift ;;
+	--no-masquerade) NO_MASQ=1; shift ;;
 	--no-service) NO_SERVICE=1; shift ;;
 	--reenroll) REENROLL=1; shift ;;
 	--prefix) need_arg "$@"; PREFIX=$2; shift 2 ;;
@@ -127,6 +130,7 @@ if [ "$DOCKER" -eq 1 ]; then
 		set -- enroll "$JOIN" --mode netstack
 		[ -n "$EDGE_ADDR" ] && set -- "$@" --edge-addr "$EDGE_ADDR"
 		[ "$NO_DISCOVERY" -eq 1 ] && set -- "$@" --no-discovery
+		[ "$NO_MASQ" -eq 1 ] && set -- "$@" --masquerade=false
 		say "enrolling"
 		docker pull -q "$IMAGE" >/dev/null || warn "could not pull $IMAGE; using the local image"
 		docker run --rm -v "$VOL:/var/lib/ingressd-connector" "$IMAGE" "$@"
@@ -298,6 +302,7 @@ else
 	[ -n "$MODE" ] && set -- "$@" --mode "$MODE"
 	[ -n "$EDGE_ADDR" ] && set -- "$@" --edge-addr "$EDGE_ADDR"
 	[ "$NO_DISCOVERY" -eq 1 ] && set -- "$@" --no-discovery
+	[ "$NO_MASQ" -eq 1 ] && set -- "$@" --masquerade=false
 	say "enrolling"
 	printf '%s\n' "$JOIN" | "$EXE" "$@"
 	ENROLLED=1

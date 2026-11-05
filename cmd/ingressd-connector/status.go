@@ -20,6 +20,13 @@ func printStatus(out io.Writer, st *client.State, s *client.Status, now time.Tim
 	fmt.Fprintf(w, "Edge:\t%s\n", st.Primary().URL)
 	fmt.Fprintf(w, "Tunnel:\t%s (subnets %s)\n", st.Tunnel(), strings.Join(st.Subnets(), ", "))
 	fmt.Fprintf(w, "Mode:\t%s\n", st.Mode)
+	if st.Mode == "tun" {
+		m := "on"
+		if !st.Masquerade {
+			m = "off (LAN hosts must route replies back through this machine; turn it on unless this host is the LAN's router)"
+		}
+		fmt.Fprintf(w, "Masquerade:\t%s\n", m)
+	}
 	if s == nil {
 		fmt.Fprintf(w, "State:\tnot running (no status file)\n")
 		for i, e := range st.Edges {
