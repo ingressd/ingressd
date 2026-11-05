@@ -102,7 +102,7 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) error {
 
 // --- identity assertion ---
 
-// assertion returns a compact ES256 JWT for the origin (aud = app),
+// assertion returns a compact ES256 JWT for the origin (aud = Audience, else App),
 // verifiable against the portal's /.well-known/jwks.json.
 func (h *Handler) assertion(sub, email, sid string, sessionExp time.Time) string {
 	now := time.Now()
@@ -110,9 +110,13 @@ func (h *Handler) assertion(sub, email, sid string, sessionExp time.Time) string
 	if !sessionExp.IsZero() && sessionExp.Before(exp) {
 		exp = sessionExp
 	}
+	aud := h.App
+	if h.Audience != "" {
+		aud = h.Audience
+	}
 	claims := map[string]any{
 		"iss": strings.TrimSuffix(h.PortalURL, "/"),
-		"aud": h.App,
+		"aud": aud,
 		"sub": sub,
 		"iat": now.Unix(),
 		"exp": exp.Unix(),

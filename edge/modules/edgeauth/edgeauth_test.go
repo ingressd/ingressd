@@ -764,3 +764,21 @@ func TestNonceHashVector(t *testing.T) {
 		t.Fatalf("nonceHash = %s", got)
 	}
 }
+
+// A realm app is named "<realm>.<name>" on a shared node; its origin gets
+// aud "<name>" as on the org's own nodes.
+func TestAssertionAudience(t *testing.T) {
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ app, aud, want string }{
+		{"web", "", "web"},
+		{"tabcde.web", "web", "web"},
+	} {
+		h := &Handler{App: tc.app, Audience: tc.aud, PortalURL: "https://auth.example.test", jwtKey: k}
+		if got := verifyJWT(t, &k.PublicKey, h.assertion("u", "alice@example.com", "s", time.Time{}))["aud"]; got != tc.want {
+			t.Errorf("app %q audience %q: aud %v, want %q", tc.app, tc.aud, got, tc.want)
+		}
+	}
+}

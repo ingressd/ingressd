@@ -176,6 +176,9 @@ func TestRealmsEdgeConfig(t *testing.T) {
 	if ec.Realm != "rb" || ec.PortalURL != "https://auth.ingressd.test/a/rb" || ec.SessionKey != e.rb.SessionRaw || ec.JWTKey != e.rb.JWTRaw {
 		t.Errorf("edge config realm=%q portal=%q, keys from the wrong realm", ec.Realm, ec.PortalURL)
 	}
+	if ec.Audience != "nas" {
+		t.Errorf("audience %q, want the app's name without its realm", ec.Audience)
+	}
 	if _, ok := ec.Policies["ra.all"]; ok || len(ec.Policies) != 1 {
 		t.Errorf("policies %v", ec.Policies)
 	}

@@ -23,7 +23,11 @@ type EdgeConfig struct {
 	App     string `json:"app"`
 	// Realm scopes the app cookie key and the revocation list to the app's
 	// realm ("" without realms).
-	Realm     string `json:"realm,omitempty"`
+	Realm string `json:"realm,omitempty"`
+	// Audience is the identity assertion's aud when it differs from App:
+	// a realm app named "<realm>.<name>" is "<name>" to its origin, as on
+	// the org's own nodes.
+	Audience  string `json:"audience,omitempty"`
 	PortalURL string `json:"portal_url"`
 	// SessionKey and JWTKey are the stored secrets (see KeyRefs); the
 	// module derives its per-app keys from them.
@@ -127,6 +131,7 @@ func BuildEdgeConfig(cfg *config.Config, res Resolver, appName, controlSocket st
 		Handler:       "edge_auth",
 		App:           appName,
 		Realm:         keys.Realm(),
+		Audience:      audience(appName, app.Realm),
 		PortalURL:     portal,
 		SessionKey:    sk,
 		JWTKey:        jk,
@@ -222,4 +227,16 @@ func edgeSelectors(cfg *config.Config, sels []config.Selector) []EdgeSelector {
 		out = append(out, es)
 	}
 	return out
+}
+
+// audience is a realm app's name without its realm prefix ("" when the
+// name has none, so aud stays the app's name).
+func audience(appName, realm string) string {
+	if realm == "" {
+		return ""
+	}
+	if n, ok := strings.CutPrefix(appName, realm+"."); ok && n != "" {
+		return n
+	}
+	return ""
 }
