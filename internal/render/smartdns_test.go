@@ -144,3 +144,66 @@ func TestRenderSeveralVPNExits(t *testing.T) {
 		t.Errorf("rules %+v", n.Rules)
 	}
 }
+
+// Per-realm Smart DNS: each realm's resolver is reachable only on its own
+// tunnel's transit address, and realm VPN exits use their explicit tables.
+func TestRenderRealmSmartDNS(t *testing.T) {
+	y := strings.NewReplacer(
+		"security: { tunnel_input: restricted }\n", "security: { tunnel_input: restricted }\nmesh:\n  address: 10.255.0.1/16\n",
+		"jwt_key: secret://tq7k2m_jwt }\n", `jwt_key: secret://tq7k2m_jwt }
+    smartdns:
+      enabled: true
+      exits: { tq7k2m.gb: { node: self, country: GB, vpn: "secret://tq7k2m-gb", table: 1907 } }
+      services: { tq7k2m.tv: { domains: [stream.example], exit: tq7k2m.gb } }
+`,
+		"revoked_sessions: [s-bob] }\n", `revoked_sessions: [s-bob] }
+    smartdns:
+      enabled: true
+      exits: { tb4x9p.gb: { node: self, country: GB, vpn: "secret://tb4x9p-gb", table: 1903 } }
+      services: { tb4x9p.tv: { domains: [stream.example], exit: tb4x9p.gb } }
+`).Replace(realmsConfig)
+	cfg, err := config.Parse([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	st := secrets.NewMemory(map[string]string{config.MeshKeySecret: "MESH-PRIV", "tq7k2m-gb": sdVPN, "tb4x9p-gb": sdVPN,
+		VPNKeySecret("tq7k2m.gb"): "VPN-A", VPNKeySecret("tb4x9p.gb"): "VPN-B"})
+	for k, v := range realmSecrets {
+		st.Set(k, v)
+	}
+	p, err := Render(cfg, st, fakeKeys{}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`iifname "ix-tq7k2m01" ip daddr 10.100.1.1 meta l4proto { tcp, udp } th dport 53 accept`,
+		`iifname "ix-tb4x9p01" ip daddr 10.100.2.1 meta l4proto { tcp, udp } th dport 53 accept`,
+		"ip daddr 10.100.1.1 tcp dport 443 dnat to 10.100.1.1:51443",
+		"ip daddr 10.100.2.1 tcp dport 443 dnat to 10.100.2.1:51443",
+	} {
+		if !strings.Contains(p.NFT, want) {
+			t.Errorf("nft lacks %q:\n%s", want, p.NFT)
+		}
+	}
+	for _, bad := range []string{`iifname "ix-tq7k2m01" ip daddr 10.100.2.1`, `iifname "ix-tb4x9p01" ip daddr 10.100.1.1`} {
+		if strings.Contains(p.NFT, bad) {
+			t.Errorf("nft lets one realm's tunnel reach the other's resolver: %q", bad)
+		}
+	}
+	rules := map[int]Rule{}
+	for _, r := range p.Network.Rules {
+		rules[r.Table] = r
+	}
+	if r := rules[1903]; r.Priority != VPNRulePriorityBase+3 || r.Mark != 1903 {
+		t.Errorf("tb4x9p.gb rule %+v", r)
+	}
+	if r := rules[1907]; r.Priority != VPNRulePriorityBase+7 || r.Mark != 1907 {
+		t.Errorf("tq7k2m.gb rule %+v", r)
+	}
+	if m, _ := VPNMark(cfg, "tq7k2m.gb"); m != 1907 {
+		t.Errorf("VPNMark = %d", m)
+	}
+}

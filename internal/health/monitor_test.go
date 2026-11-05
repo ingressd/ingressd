@@ -261,11 +261,18 @@ func TestTunnelDown(t *testing.T) {
 	if r := h.m.edgeState().Pools["web"].Origins["a"].Reason; !strings.Contains(r, "tunnel home down") {
 		t.Fatalf("reason = %q", r)
 	}
+	// PoP forwarding reads tunnel state directly (apps without pools).
+	if tu := h.m.edgeState().Tunnels; !tu["home"].Down || tu["cloud"].Down {
+		t.Fatalf("edge tunnels = %+v", tu)
+	}
 	h.tuns[0].LastHandshake = h.now
 	h.m.pollTunnels()
 	h.step()
 	if !h.healthy("a") {
 		t.Fatal("origin not back after tunnel recovery")
+	}
+	if len(h.m.edgeState().Tunnels) != 0 {
+		t.Fatalf("recovered tunnel still pushed as down: %+v", h.m.edgeState().Tunnels)
 	}
 }
 

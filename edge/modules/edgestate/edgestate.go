@@ -47,6 +47,14 @@ type State struct {
 	// Updated is when the control plane last pushed.
 	Updated time.Time            `json:"updated"`
 	Pools   map[string]PoolState `json:"pools,omitempty"`
+	// Tunnels holds the tunnels the control plane found down (stale
+	// handshake or missing interface); absent tunnels are up.
+	Tunnels map[string]TunnelState `json:"tunnels,omitempty"`
+}
+
+// TunnelState is the control plane's view of one tunnel.
+type TunnelState struct {
+	Down bool `json:"down,omitempty"`
 }
 
 // PoolState is the runtime state of one pool.

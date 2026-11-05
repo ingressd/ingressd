@@ -42,10 +42,10 @@ func renderNFT(cfg *config.Config, extraTCP, extraUDP []int) string {
 			udp = append(udp, t.ListenPort)
 		}
 		var tunnelRules, output string
-		rules := smartDNSInputRules(cfg) + connectorInputRules(cfg)
+		rules := smartDNSInputRules(cfg) + connectorInputRules(cfg) + forwardInputRules(cfg)
 		if cfg.TunnelInputRestricted() {
 			tunnelRules = restrictedTunnelInput(cfg)
-			rules = smartDNSRules(cfg, false, true)
+			rules = smartDNSRules(cfg, false, true) + forwardInputRules(cfg)
 			output = restrictedOutput(cfg)
 		}
 		fmt.Fprintf(&b, `
@@ -148,10 +148,10 @@ func restrictedOutput(cfg *config.Config) string {
 	return fmt.Sprintf(`
 	chain output {
 		type filter hook output priority filter; policy accept;
-		meta skuid != 0 meta l4proto tcp ip daddr { %s } drop
+%s		meta skuid != 0 meta l4proto tcp ip daddr { %s } drop
 		meta skuid != 0 meta l4proto tcp ip6 daddr { %s } drop
 	}
-`, strings.Join(v4, ", "), strings.Join(v6, ", "))
+`, forwardOutputRule(cfg), strings.Join(v4, ", "), strings.Join(v6, ", "))
 }
 
 func portSet(ports []int) string {

@@ -155,8 +155,8 @@ func TestRealmsValidation(t *testing.T) {
 			"access: is not allowed alongside realms"},
 		{"open tunnel input refused", func(c *Config) { c.Security.TunnelInput = "" },
 			"security.tunnel_input: must be restricted alongside realms"},
-		{"smartdns refused", func(c *Config) { c.SmartDNS = &SmartDNS{} },
-			"smartdns: is not supported alongside realms yet"},
+		{"top-level smartdns refused", func(c *Config) { c.SmartDNS = &SmartDNS{} },
+			"smartdns: is not allowed alongside realms (it would serve every realm's tunnels); use realms.<name>.smartdns"},
 		{"protected app needs realm access", func(c *Config) { c.Realms["tq7k2m"] = Realm{} },
 			`realms.tq7k2m.access: is required: app "tq7k2m.nas" of this realm has access policies`},
 		{"realm without protected apps needs no access", func(c *Config) {
@@ -324,5 +324,18 @@ func TestEdgeOutputDeny(t *testing.T) {
 		if err := mustParse(t, baseYAML+tt.yaml).Validate(); err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("Validate = %v, want %q", err, tt.want)
 		}
+	}
+}
+
+func TestRealmIFBName(t *testing.T) {
+	if got := RealmIFBName("tq7k2m"); got != "ifb-tq7k2m" {
+		t.Errorf("RealmIFBName(tq7k2m) = %q", got)
+	}
+	long := RealmIFBName("averylongrealmname")
+	if len(long) > 15 || !strings.HasPrefix(long, "ifb-aver-") || long == RealmIFBName("averylongrealmnamf") {
+		t.Errorf("RealmIFBName(long) = %q", long)
+	}
+	if got := RealmIFBName("abcdefghijk"); got != "ifb-abcdefghijk" || len(got) != 15 {
+		t.Errorf("11-character realm: %q", got)
 	}
 }

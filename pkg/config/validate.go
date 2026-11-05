@@ -74,6 +74,7 @@ func (c *Config) Validate() error {
 	c.validateAdmins(v)
 	c.validateSmartDNS(v)
 	c.validateMesh(v)
+	c.validateForward(v)
 	c.validateRealms(v)
 	return errors.Join(v.errs...)
 }

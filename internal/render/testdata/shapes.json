@@ -1,0 +1,19 @@
+[
+  {
+    "realm": "tb4x9p",
+    "ifb": "ifb-tb4x9p",
+    "rate_mbit": 100,
+    "tunnels": [
+      "ix-tb4x9p01"
+    ]
+  },
+  {
+    "realm": "tq7k2m",
+    "ifb": "ifb-tq7k2m",
+    "rate_mbit": 20,
+    "tunnels": [
+      "ix-tq7k2m01",
+      "ix-tq7k2m02"
+    ]
+  }
+]

@@ -30,6 +30,7 @@ const maxFrame = 4096
 // ConnectRequest asks an exit to open a stream.
 type ConnectRequest struct {
 	Exit    string       `json:"exit"`              // exit name, must be a self exit on the exit node
+	Realm   string       `json:"realm,omitempty"`   // realm the home node relays for; must be the exit's
 	Service string       `json:"service,omitempty"` // informational (logs)
 	Host    string       `json:"host"`              // SNI / Host of the client's stream
 	Port    int          `json:"port"`              // 443 or 80

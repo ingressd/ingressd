@@ -130,11 +130,16 @@ func (m *Manager) answer(localAddr, remoteAddr net.Addr, req *dns.Msg) *dns.Msg 
 		return reply(req, dns.RcodeRefused)
 	}
 
+	sc := st.scopeAt(local)
+	if sc == nil {
+		entry.Result = "refused (no resolver on this address)"
+		return reply(req, dns.RcodeRefused)
+	}
 	ctx, cancel := context.WithTimeout(m.ctx(), queryTimeout)
 	defer cancel()
-	r, routed := st.match.match(name)
+	r, routed := sc.match.match(name)
 	if !routed {
-		resp, err := m.forward(ctx, st, req)
+		resp, err := m.forward(ctx, sc, req)
 		if err != nil {
 			entry.Result = "SERVFAIL (upstream: " + err.Error() + ")"
 			return reply(req, dns.RcodeServerFailure)
@@ -187,9 +192,9 @@ func joinAddrs(as []netip.Addr) string {
 	return strings.Join(s, ", ")
 }
 
-// forward sends a non-service query to the upstream resolvers.
-func (m *Manager) forward(ctx context.Context, st *state, req *dns.Msg) (*dns.Msg, error) {
-	return exchange(ctx, st.upstream, &net.Dialer{Timeout: dnsTimeout}, req)
+// forward sends a non-service query to the block's upstream resolvers.
+func (m *Manager) forward(ctx context.Context, sc *scope, req *dns.Msg) (*dns.Msg, error) {
+	return exchange(ctx, sc.upstream, &net.Dialer{Timeout: dnsTimeout}, req)
 }
 
 // exitUp reports whether an exit can egress right now.
@@ -298,10 +303,10 @@ func (m *Manager) resolveAtExit(ctx context.Context, st *state, exit, name strin
 	}
 	var resp resolveResponse
 	if ex.IsSelf() {
-		resp = m.resolveLocal(ctx, exit, name)
+		resp = m.resolveLocal(ctx, ex.realm, exit, name)
 	} else {
 		var err error
-		resp, err = m.remote.Resolve(ctx, ex.Node, exit, name)
+		resp, err = m.remote.Resolve(ctx, ex.Node, ex.realm, exit, name)
 		if err != nil {
 			if !errors.Is(err, context.Canceled) {
 				m.remote.MarkDown(ex.Node, err)

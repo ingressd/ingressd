@@ -5,19 +5,19 @@ package render
 import (
 	"fmt"
 	"net/netip"
-	"slices"
 	"strings"
 
 	"github.com/ingressd/ingressd/internal/smartdns/wgconf"
 	"github.com/ingressd/ingressd/pkg/config"
 )
 
-// Smart DNS exits with a VPN get their own routing table and fwmark,
-// starting at VPNTableBase, selected by rules at VPNRulePriorityBase+i.
+// Smart DNS exits with a VPN get their own routing table and fwmark
+// (config.Config.VPNTable, from VPNTableBase), selected by a rule at
+// VPNRulePriorityBase + (table - VPNTableBase).
 // Sockets egressing through the VPN set SO_MARK to the table number and bind
 // to the interface, so they can never leave by the main route.
 const (
-	VPNTableBase        = 1900
+	VPNTableBase        = config.VPNTableMin
 	VPNRulePriorityBase = RulePriorityBase + 900
 	// MeshMTU leaves room for WireGuard over WireGuard (a VPN exit relays
 	// mesh traffic over its own tunnel).
@@ -30,13 +30,7 @@ func VPNKeySecret(exit string) string { return "wg-vpn-" + exit }
 func VPNPSKSecret(exit string) string { return "wg-vpn-" + exit + "-psk" }
 
 // VPNMark returns the fwmark (= routing table) for a VPN exit on this node.
-func VPNMark(cfg *config.Config, exit string) (int, bool) {
-	i := slices.Index(cfg.VPNExits(), exit)
-	if i < 0 {
-		return 0, false
-	}
-	return VPNTableBase + i, true
-}
+func VPNMark(cfg *config.Config, exit string) (int, bool) { return cfg.VPNTable(exit) }
 
 // renderSmartDNSNetwork adds the mesh interface and VPN exit interfaces.
 func renderSmartDNSNetwork(cfg *config.Config, res Resolver, n *Network) error {
@@ -59,8 +53,8 @@ func renderSmartDNSNetwork(cfg *config.Config, res Resolver, n *Network) error {
 		n.Interfaces = append(n.Interfaces, ifc)
 	}
 
-	for i, name := range cfg.VPNExits() {
-		e := cfg.SmartDNS.Exits[name]
+	for _, name := range cfg.VPNExits() {
+		e, _, _ := cfg.SmartDNSExit(name)
 		text, err := res.Resolve(e.VPN)
 		if err != nil {
 			return fmt.Errorf("smartdns.exits.%s.vpn: %w", name, err)
@@ -89,13 +83,13 @@ func renderSmartDNSNetwork(cfg *config.Config, res Resolver, n *Network) error {
 			mtu = wc.MTU
 		}
 		n.Interfaces = append(n.Interfaces, Interface{Name: ifname, Address: wc.Address.String(), MTU: mtu, PrivateKey: priv, Peers: []Peer{peer}})
-		table := VPNTableBase + i
+		table, _ := cfg.VPNTable(name)
 		// Two /1 routes instead of a default route (as wg-quick does).
 		n.Routes = append(n.Routes,
 			Route{Dst: "0.0.0.0/1", Dev: ifname, Table: table},
 			Route{Dst: "128.0.0.0/1", Dev: ifname, Table: table},
 		)
-		n.Rules = append(n.Rules, Rule{Priority: VPNRulePriorityBase + i, Mark: table, Table: table})
+		n.Rules = append(n.Rules, Rule{Priority: VPNRulePriorityBase + table - VPNTableBase, Mark: table, Table: table})
 		n.NoRPFilter = append(n.NoRPFilter, ifname)
 	}
 	return nil

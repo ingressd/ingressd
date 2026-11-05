@@ -105,7 +105,7 @@ func TestMatcher(t *testing.T) {
 		"streamtv": {Domains: []string{"stream.example", "streamtv.example"}, Exit: "nl"},
 		"video":    {Domains: []string{"video.stream.example"}, Exit: "de"},
 		"off":      {Domains: []string{"disabled.test"}, Exit: "nl", Enabled: &off},
-	}})
+	}}, "")
 	for name, want := range map[string]string{
 		"stream.example":              "streamtv/nl",
 		"TV.Stream.EXAMPLE.":          "streamtv/nl",

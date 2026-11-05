@@ -1,0 +1,158 @@
+{
+  "forward_server": {
+    "automatic_https": {
+      "disable": true
+    },
+    "listen": [
+      "10.255.0.1:51880"
+    ],
+    "routes": [
+      {
+        "handle": [
+          {
+            "handler": "edge_forward_verify",
+            "peers": [
+              "10.255.0.2",
+              "10.255.0.3"
+            ],
+            "secret": "0123456789abcdef0123456789abcdef",
+            "self": "10.255.0.1"
+          }
+        ]
+      },
+      {
+        "handle": [
+          {
+            "handler": "reverse_proxy",
+            "load_balancing": {
+              "selection_policy": {
+                "policy": "round_robin"
+              }
+            },
+            "transport": {
+              "dial_timeout": "5s",
+              "protocol": "http"
+            },
+            "upstreams": [
+              {
+                "dial": "192.168.9.9:80"
+              }
+            ]
+          }
+        ],
+        "match": [
+          {
+            "vars": {
+              "edge_forward_app": [
+                "lab"
+              ]
+            }
+          }
+        ],
+        "terminal": true
+      },
+      {
+        "handle": [
+          {
+            "handler": "reverse_proxy",
+            "load_balancing": {
+              "selection_policy": {
+                "policy": "round_robin"
+              }
+            },
+            "transport": {
+              "dial_timeout": "5s",
+              "protocol": "http",
+              "tls": {
+                "insecure_skip_verify": true
+              }
+            },
+            "upstreams": [
+              {
+                "dial": "192.168.0.10:5001"
+              }
+            ]
+          }
+        ],
+        "match": [
+          {
+            "vars": {
+              "edge_forward_app": [
+                "nas"
+              ]
+            }
+          }
+        ],
+        "terminal": true
+      },
+      {
+        "handle": [
+          {
+            "body": "Unknown app\n",
+            "handler": "static_response",
+            "status_code": 404
+          }
+        ]
+      }
+    ],
+    "trusted_proxies": {
+      "ranges": [
+        "10.255.0.2/32",
+        "10.255.0.3/32"
+      ],
+      "source": "static"
+    }
+  },
+  "nas_proxy": {
+    "handler": "reverse_proxy",
+    "health_checks": {
+      "passive": {
+        "fail_duration": "30s",
+        "max_fails": 1
+      }
+    },
+    "load_balancing": {
+      "selection_policy": {
+        "local": {
+          "policy": "round_robin"
+        },
+        "policy": "edge_forward",
+        "siblings": [
+          "10.255.0.2:51880",
+          "10.255.0.3:51880"
+        ],
+        "tunnels": {
+          "192.168.0.10:5001": "home"
+        }
+      },
+      "try_duration": "12s"
+    },
+    "transport": {
+      "dial_timeout": "5s",
+      "forward": {
+        "app": "nas",
+        "node": "10.255.0.1",
+        "secret": "0123456789abcdef0123456789abcdef",
+        "siblings": [
+          "10.255.0.2:51880",
+          "10.255.0.3:51880"
+        ]
+      },
+      "protocol": "edge_forward",
+      "tls": {
+        "insecure_skip_verify": true
+      }
+    },
+    "upstreams": [
+      {
+        "dial": "192.168.0.10:5001"
+      },
+      {
+        "dial": "10.255.0.2:51880"
+      },
+      {
+        "dial": "10.255.0.3:51880"
+      }
+    ]
+  }
+}

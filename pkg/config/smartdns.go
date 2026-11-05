@@ -63,6 +63,11 @@ type SmartDNSExit struct {
 	// .conf; the exit node egresses through that tunnel instead of its own
 	// IP. Only used on the exit node itself.
 	VPN string `yaml:"vpn"`
+	// Table pins a VPN exit's routing table and fwmark (VPNTableMin to
+	// VPNTableMax), so adding or removing another exit never renumbers it.
+	// Required in a realm; 0 elsewhere means VPNTableMin + the exit's index
+	// among the VPN exits in name order.
+	Table int `yaml:"table,omitempty"`
 }
 
 // Mesh connects the nodes of one org over WireGuard.

@@ -39,14 +39,16 @@ type fakeExits struct {
 	downExits   map[string]bool         // the exit node reports these exits down
 	exitAddrs   map[string][]netip.Addr // what each exit resolves names to
 	resolved    []string                // exit of every Resolve call
+	realms      []string                // realm of every Resolve call
 	health      func(node string) (map[string]exitState, error)
 }
 
-func (f *fakeExits) Resolve(_ context.Context, node, exit, name string) (resolveResponse, error) {
+func (f *fakeExits) Resolve(_ context.Context, node, realm, exit, name string) (resolveResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.resolves++
 	f.resolved = append(f.resolved, exit)
+	f.realms = append(f.realms, realm)
 	if f.resErr != nil || f.downNodes[node] || f.brokenNodes[node] {
 		return resolveResponse{}, cmp.Or(f.resErr, errors.New("no route to host"))
 	}
@@ -66,7 +68,7 @@ func (f *fakeExits) Connect(_ context.Context, node string, req ConnectRequest) 
 	return f.connect(req)
 }
 
-func (f *fakeExits) Health(_ context.Context, node string) (map[string]exitState, error) {
+func (f *fakeExits) Health(_ context.Context, node, _ string) (map[string]exitState, error) {
 	if f.health == nil {
 		return nil, errHealthUnsupported
 	}

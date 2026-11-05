@@ -8,16 +8,18 @@ import (
 	"github.com/ingressd/ingressd/pkg/config"
 )
 
-// route is where a service's names go: its exits in order of preference.
+// route is where a service's names go: its exits in order of preference,
+// within its realm's block.
 type route struct {
 	Service string
 	Exits   []string
+	Realm   string
 }
 
 // matcher maps names to services by longest domain suffix.
 type matcher map[string]route
 
-func newMatcher(s *config.SmartDNS) matcher {
+func newMatcher(s *config.SmartDNS, realm string) matcher {
 	m := matcher{}
 	if s == nil {
 		return m
@@ -26,7 +28,7 @@ func newMatcher(s *config.SmartDNS) matcher {
 		if !svc.IsEnabled() {
 			continue
 		}
-		r := route{Service: name, Exits: svc.ExitList()}
+		r := route{Service: name, Exits: svc.ExitList(), Realm: realm}
 		for _, d := range svc.Domains {
 			m[normalize(d)] = r
 		}

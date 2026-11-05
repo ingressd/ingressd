@@ -22,6 +22,9 @@ import (
 // by the edge_state app (edge/modules/edgestate, which mirrors these types).
 type EdgeState struct {
 	Pools map[string]EdgePool `json:"pools"`
+	// Tunnels lists the tunnels that are down (PoP forwarding sends their
+	// apps to sibling nodes).
+	Tunnels map[string]EdgeTunnel `json:"tunnels,omitempty"`
 	// StickyKey signs sticky-session cookies (base64 in JSON).
 	StickyKey []byte `json:"sticky_key,omitempty"`
 }
@@ -31,6 +34,12 @@ type EdgePool struct {
 	Tier     int                   `json:"tier,omitempty"`
 	Origins  map[string]EdgeOrigin `json:"origins,omitempty"`
 	Override *EdgeOverride         `json:"override,omitempty"`
+}
+
+// EdgeTunnel carries no reason: it changes with every poll (handshake age)
+// and would defeat the unchanged-state check in push.
+type EdgeTunnel struct {
+	Down bool `json:"down,omitempty"`
 }
 
 type EdgeOrigin struct {

@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"hash/fnv"
 	"net/netip"
 	"net/url"
 	"slices"
@@ -19,6 +20,9 @@ type Realm struct {
 	// when the realm has protected apps.
 	Access *Access     `yaml:"access,omitempty"`
 	Shape  *RealmShape `yaml:"shape,omitempty"`
+	// SmartDNS is the realm's own resolver and relay, listening only on
+	// its tunnels' transit addresses (see SmartDNSScopes).
+	SmartDNS *SmartDNS `yaml:"smartdns,omitempty"`
 }
 
 // RealmShape caps a realm's bandwidth on this node.
@@ -28,6 +32,29 @@ type RealmShape struct {
 
 // MaxRealmRateMbit bounds realms.<r>.shape.rate_mbit.
 const MaxRealmRateMbit = 100000
+
+// RealmIFBName is the IFB device that shapes a realm's tunnel ingress:
+// "ifb-<realm>" when it fits Linux's 15-byte limit, else the first four
+// characters and a hash of the whole name.
+func RealmIFBName(realm string) string {
+	if len(realm) <= 11 {
+		return "ifb-" + realm
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(realm)) // hash.Hash.Write never returns an error
+	return fmt.Sprintf("ifb-%s-%05x", strings.TrimRight(realm[:4], "-"), h.Sum32()&0xfffff)
+}
+
+// RealmTunnels returns the names of a realm's tunnels, sorted.
+func (c *Config) RealmTunnels(realm string) []string {
+	var out []string
+	for _, name := range sortedKeys(c.Tunnels) {
+		if c.Tunnels[name].Realm == realm {
+			out = append(out, name)
+		}
+	}
+	return out
+}
 
 // RealmAccess returns a realm's access settings (nil if the realm has none
 // or does not exist).
@@ -112,7 +139,7 @@ func (c *Config) validateRealms(v *validator) {
 		v.add("edge.admin.ip_allowlist", "is not allowed alongside realms")
 	}
 	if c.SmartDNS != nil {
-		v.add("smartdns", "is not supported alongside realms yet")
+		v.add("smartdns", "is not allowed alongside realms (it would serve every realm's tunnels); use realms.<name>.smartdns")
 	}
 	if !c.TunnelInputRestricted() {
 		v.add("security.tunnel_input", "must be restricted alongside realms (open input lets every realm's sites reach the proxy and SSH through their tunnels)")
@@ -126,6 +153,14 @@ func (c *Config) validateRealms(v *validator) {
 		}
 		if s := r.Shape; s != nil && (s.RateMbit < 1 || s.RateMbit > MaxRealmRateMbit) {
 			v.add(p+".shape.rate_mbit", "must be 1-%d, got %d", MaxRealmRateMbit, s.RateMbit)
+		}
+		if r.Shape != nil {
+			ifb := RealmIFBName(name)
+			for _, other := range sortedKeys(c.Realms) {
+				if other < name && c.Realms[other].Shape != nil && RealmIFBName(other) == ifb {
+					v.add(p, "shaping device %q is already used by realm %q; rename one of them", ifb, other)
+				}
+			}
 		}
 		if r.Access == nil {
 			for _, app := range sortedKeys(c.Apps) {

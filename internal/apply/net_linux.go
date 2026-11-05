@@ -66,6 +66,9 @@ func Net(_ context.Context, n render.Network) error {
 		}
 	}
 
+	if err := reconcileShapes(n.Shapes); err != nil {
+		return err
+	}
 	if err := reconcileRoutes(n.Routes); err != nil {
 		return err
 	}
