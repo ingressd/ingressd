@@ -17,14 +17,15 @@ import (
 type Join struct {
 	// URL is the edge's admin URL, e.g. https://edge.example.com.
 	URL string `json:"u,omitempty"`
-	// Token is the one-time enrolment token.
-	Token string `json:"t"`
+	// Token is the one-time enrolment token, used for edges without their own.
+	Token string `json:"t,omitempty"`
 	// CA, when set, is the PEM of the CA the edge certificate chains to. The
 	// connector then trusts only this CA for the edge (pinning).
 	CA string `json:"ca,omitempty"`
 	// Edges optionally lists several edges to try in order (multi-PoP):
-	// {"e":[{"u":…,"ca":…}],"t":…}. DecodeJoin fills URL and CA from the
-	// first one when they are empty.
+	// {"e":[{"u":…,"ca":…,"t":…}],"t":…}. Enrolment tokens are local to the
+	// node that issued them, so each edge may carry its own. DecodeJoin fills
+	// URL and CA from the first one when they are empty.
 	Edges []JoinEdge `json:"e,omitempty"`
 }
 
@@ -32,6 +33,7 @@ type Join struct {
 type JoinEdge struct {
 	URL string `json:"u"`
 	CA  string `json:"ca,omitempty"`
+	T   string `json:"t,omitempty"`
 }
 
 // All returns every edge of the join string in order, the single-edge
@@ -44,6 +46,8 @@ func (j Join) All() []JoinEdge {
 	for _, e := range j.Edges {
 		if e.URL != j.URL {
 			out = append(out, e)
+		} else if len(out) > 0 && out[0].T == "" {
+			out[0].T = e.T
 		}
 	}
 	return out
@@ -84,10 +88,13 @@ func DecodeJoin(s string) (Join, error) {
 // Validate checks the required fields.
 func (j Join) Validate() error {
 	all := j.All()
-	if len(all) == 0 || j.Token == "" {
+	if len(all) == 0 {
 		return errors.New("join string: edge URL and token are required")
 	}
 	for _, e := range all {
+		if e.T == "" && j.Token == "" {
+			return fmt.Errorf("join string: no token for edge %q", e.URL)
+		}
 		u, err := url.Parse(e.URL)
 		if err != nil || u.Scheme != "https" || u.Hostname() == "" {
 			return fmt.Errorf("join string: edge URL must look like https://edge.example.com, got %q", e.URL)
