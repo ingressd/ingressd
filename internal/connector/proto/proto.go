@@ -2,13 +2,16 @@
 
 // Package proto holds the wire types shared by the edge's connector endpoints
 // (internal/connector) and ingressd-connector (internal/connector/client).
-// It has no dependencies so the connector binary stays small and portable.
+// It depends only on the standard library and pkg/nodeproto (a leaf package).
 package proto
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/ingressd/ingressd/pkg/nodeproto"
 )
 
 // Paths on the edge's admin hostname.
@@ -65,7 +68,9 @@ type EnrollResponse struct {
 
 // TunnelConfig is everything the connector needs to bring up its side.
 type TunnelConfig struct {
-	Tunnel        string `json:"tunnel"`
+	Tunnel string `json:"tunnel"`
+	// Node is the edge's own node id (managed nodes; additive).
+	Node          string `json:"node,omitempty"`
 	EdgePublicKey string `json:"edge_public_key"`
 	// Endpoint is the edge's WireGuard UDP listener, host:port.
 	Endpoint string `json:"endpoint"`
@@ -92,6 +97,10 @@ type TunnelConfig struct {
 	// KeyAuth is the newest IngressdKey header version this edge accepts
 	// (KeyAuthV2; 0 = v1 only, an edge from before v2).
 	KeyAuth int `json:"key_auth,omitempty"`
+	// SmartDNS is the site's signed Smart DNS config
+	// (nodeproto.SignedSmartDNS), passed through unchanged; absent when the
+	// site runs no Smart DNS.
+	SmartDNS json.RawMessage `json:"smartdns,omitempty"`
 	// Revision changes whenever any field above changes.
 	Revision string `json:"revision"`
 	// DiscoverID, when set in a poll response, asks the connector to scan its
@@ -133,6 +142,11 @@ type Health struct {
 	// Edges is the connector's view of every edge it links to, so any
 	// node of the site can report RTTs to all of them (additive).
 	Edges []EdgeReport `json:"edges,omitempty"`
+	// SmartDNS is the connector's Smart DNS state (additive). SmartDNSUsage
+	// are relay usage deltas since the last report that carried them; the
+	// connector sends them to one edge only.
+	SmartDNS      *nodeproto.ConnectorSmartDNS `json:"smartdns,omitempty"`
+	SmartDNSUsage []nodeproto.ServiceUsage     `json:"smartdns_usage,omitempty"`
 }
 
 // EdgeReport is one edge as the connector sees it. RTTMillis is an EWMA of

@@ -36,6 +36,8 @@ type EnrollOptions struct {
 	Mode        string
 	Interface   string
 	Masquerade  bool
+	// OrgKey is pinned for the signed Smart DNS config (from the join string).
+	OrgKey string
 }
 
 // Enroll generates the site keypair locally, exchanges the one-time token
@@ -69,12 +71,14 @@ func Enroll(ctx context.Context, statePath string, o EnrollOptions) (*State, err
 			continue
 		}
 		es.Credential, es.Config, es.LastSeen = er.Credential, er.Config, time.Now().UTC()
+		es.Node = er.Config.Node
 		st := &State{
 			NoDiscovery: o.NoDiscovery,
 			Mode:        o.Mode,
 			Interface:   o.Interface,
 			Masquerade:  o.Masquerade,
 			PrivateKey:  key.String(),
+			OrgKey:      o.OrgKey,
 			EnrolledAt:  time.Now().UTC(),
 			Edges:       []EdgeState{es},
 		}
@@ -135,5 +139,6 @@ func (o *EnrollOptions) ApplyJoin(joinString string) error {
 		o.CAPEM = all[0].CA
 	}
 	o.Alternates = all[1:]
+	o.OrgKey = j.OrgKey
 	return nil
 }

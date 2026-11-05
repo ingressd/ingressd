@@ -12,35 +12,25 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"net/url"
+	"strconv"
 	"time"
 
-	"github.com/ingressd/ingressd/internal/mesh"
 	"github.com/ingressd/ingressd/pkg/config"
 )
 
-// The exit resolve API (mesh API, JSON over HTTP on the mesh address, only
-// reachable from mesh peers):
+// The node exit API, served on each allowed connector tunnel's edge transit
+// address (config.SmartDNSExitAPIPort) and reached by the connector through
+// that tunnel only:
 //
-//	POST /v1/resolve {"exit":"nl","name":"tv.stream.example","realm":""}
+//	POST /v1/resolve {"name":"tv.stream.example"}
 //	→ {"exit_up":true,"rcode":0,"addrs":["18.239.36.1"],"ttl":60}
-//	→ {"exit_up":false,"error":"VPN tunnel ix-x-nl has no recent handshake"}
-//	→ {"exit_up":true,"error":"10.2.0.1:53: i/o timeout"}   (resolution failed)
+//	→ {"exit_up":false,"error":"egress 198.51.100.7 geolocates to DE, expected NL"}
+//	→ {"exit_up":true,"error":"1.1.1.1:53: i/o timeout"}   (resolution failed)
 //
-//	GET /v1/exits?realm=<r>   (health of the exits the node hosts for realm r,
-//	                          default none; 404 on older nodes)
-//
-// An exit of realm r (realms.r.smartdns) is only resolved, relayed through
-// and reported for requests naming r, and an exit outside realms only for
-// requests naming none.
-//	→ {"exits":{"gb-lon":{"up":true},"gb-ams":{"up":false,"error":"no recent handshake"}}}
+//	GET /v1/exit → {"up":true,"country":"NL","egress":"198.51.100.7"}
 
 type resolveRequest struct {
-	Exit string `json:"exit"`
 	Name string `json:"name"`
-	// Realm is the realm the home node resolves for ("" outside realms);
-	// the exit node refuses an exit of any other realm.
-	Realm string `json:"realm,omitempty"`
 }
 
 type resolveResponse struct {
@@ -52,54 +42,72 @@ type resolveResponse struct {
 }
 
 type exitState struct {
-	Up    bool   `json:"up"`
-	Error string `json:"error,omitempty"`
+	Up      bool   `json:"up"`
+	Country string `json:"country,omitempty"`
+	Egress  string `json:"egress,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
-type exitsResponse struct {
-	Exits map[string]exitState `json:"exits"`
-}
-
-// errHealthUnsupported: the exit node predates GET /v1/exits; its exits are
-// then judged by the mesh probe and resolve answers only.
-var errHealthUnsupported = errors.New("exit node does not report exit health")
-
-// errExitDown means the exit cannot egress: its node is unreachable over the
-// mesh or its VPN is down. Service names then fail closed (SERVFAIL).
+// errExitDown means the exit cannot egress: its node is unreachable or
+// reports itself down, or its VPN is down. Service names then fail closed
+// (SERVFAIL).
 var errExitDown = errors.New("exit is down")
 
-// exitClient talks to exits on other nodes (tests replace it).
-type exitClient interface {
-	// Resolve asks node to resolve name for exit. An error means the node
-	// could not be reached (transport failure).
-	Resolve(ctx context.Context, node, realm, exit, name string) (resolveResponse, error)
+// ExitClient talks to node exits (the connector reaches them through its
+// tunnels; tests replace it).
+type ExitClient interface {
+	// Resolve asks node to resolve name. An error means the node could not
+	// be reached (transport failure).
+	Resolve(ctx context.Context, node, name string) (resolveResponse, error)
 	// Connect opens a relayed stream through node.
 	Connect(ctx context.Context, node string, req ConnectRequest) (net.Conn, error)
-	// Health returns the state of the exits node hosts for realm, or
-	// errHealthUnsupported.
-	Health(ctx context.Context, node, realm string) (map[string]exitState, error)
+	// Health returns the node exit's state.
+	Health(ctx context.Context, node string) (exitState, error)
+	// Up reports whether node is reachable at all (its tunnel is up).
 	Up(node string) bool
-	MarkDown(node string, err error)
 }
 
-type meshExitClient struct{ m *mesh.Mesh }
+// TunnelExitClient reaches node exits at their edge transit addresses
+// through Dial (the connector's tunnel).
+type TunnelExitClient struct {
+	// Addr returns a node's edge transit address, false when the site has
+	// no tunnel to it.
+	Addr func(node string) (netip.Addr, bool)
+	// NodeUp reports whether the tunnel to node is up.
+	NodeUp func(node string) bool
+	Dial   DialFunc
+}
 
-func (c meshExitClient) Up(node string) bool             { return c.m.Up(node) }
-func (c meshExitClient) MarkDown(node string, err error) { c.m.MarkDown(node, err) }
+func (c *TunnelExitClient) Up(node string) bool { return c.NodeUp(node) }
 
-func (c meshExitClient) Resolve(ctx context.Context, node, realm, exit, name string) (resolveResponse, error) {
+func (c *TunnelExitClient) addr(node string, port int) (string, error) {
+	a, ok := c.Addr(node)
+	if !ok {
+		return "", fmt.Errorf("no tunnel to node %s", node)
+	}
+	return net.JoinHostPort(a.String(), strconv.Itoa(port)), nil
+}
+
+func (c *TunnelExitClient) http() *http.Client {
+	return &http.Client{
+		Timeout:   healthTimeout,
+		Transport: &http.Transport{DialContext: c.Dial, Proxy: nil, DisableKeepAlives: true},
+	}
+}
+
+func (c *TunnelExitClient) Resolve(ctx context.Context, node, name string) (resolveResponse, error) {
 	var out resolveResponse
-	u, err := c.m.URL(node, "/v1/resolve")
+	a, err := c.addr(node, config.SmartDNSExitAPIPort)
 	if err != nil {
 		return out, err
 	}
-	body, _ := json.Marshal(resolveRequest{Exit: exit, Name: name, Realm: realm})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+	body, _ := json.Marshal(resolveRequest{Name: name})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+a+"/v1/resolve", bytes.NewReader(body))
 	if err != nil {
 		return out, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.m.Client().Do(req)
+	resp, err := c.http().Do(req)
 	if err != nil {
 		return out, err
 	}
@@ -107,46 +115,42 @@ func (c meshExitClient) Resolve(ctx context.Context, node, realm, exit, name str
 	if resp.StatusCode != http.StatusOK {
 		return out, fmt.Errorf("exit node answered HTTP %d", resp.StatusCode)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&out); err != nil {
 		return out, fmt.Errorf("exit node: %w", err)
 	}
 	return out, nil
 }
 
-func (c meshExitClient) Health(ctx context.Context, node, realm string) (map[string]exitState, error) {
-	path := "/v1/exits"
-	if realm != "" {
-		path += "?realm=" + url.QueryEscape(realm)
-	}
-	u, err := c.m.URL(node, path)
+func (c *TunnelExitClient) Health(ctx context.Context, node string) (exitState, error) {
+	var out exitState
+	a, err := c.addr(node, config.SmartDNSExitAPIPort)
 	if err != nil {
-		return nil, err
+		return out, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+a+"/v1/exit", nil)
 	if err != nil {
-		return nil, err
+		return out, err
 	}
-	resp, err := c.m.Client().Do(req)
+	resp, err := c.http().Do(req)
 	if err != nil {
-		return nil, err
+		return out, err
 	}
 	defer resp.Body.Close()
-	switch resp.StatusCode {
-	case http.StatusOK:
-	case http.StatusNotFound, http.StatusMethodNotAllowed:
-		return nil, errHealthUnsupported
-	default:
-		return nil, fmt.Errorf("exit node answered HTTP %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		return out, fmt.Errorf("exit node answered HTTP %d", resp.StatusCode)
 	}
-	var out exitsResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&out); err != nil {
-		return nil, fmt.Errorf("exit node: %w", err)
+		return out, fmt.Errorf("exit node: %w", err)
 	}
-	return out.Exits, nil
+	return out, nil
 }
 
-func (c meshExitClient) Connect(ctx context.Context, node string, req ConnectRequest) (net.Conn, error) {
-	conn, err := c.m.DialPeer(ctx, node, config.MeshRelayPort)
+func (c *TunnelExitClient) Connect(ctx context.Context, node string, req ConnectRequest) (net.Conn, error) {
+	a, err := c.addr(node, config.SmartDNSExitRelayPort)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := c.Dial(ctx, "tcp4", a)
 	if err != nil {
 		return nil, err
 	}
@@ -175,72 +179,3 @@ type relayRefused struct {
 }
 
 func (e *relayRefused) Error() string { return "exit refused: " + e.msg }
-
-// resolveHandler serves POST /v1/resolve on exit nodes.
-func (m *Manager) resolveHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req resolveRequest
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil || req.Name == "" {
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		resp := m.resolveLocal(r.Context(), req.Realm, req.Exit, normalize(req.Name))
-		json.NewEncoder(w).Encode(resp)
-	})
-}
-
-// exitsHandler serves GET /v1/exits on exit nodes.
-func (m *Manager) exitsHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		out := exitsResponse{Exits: map[string]exitState{}}
-		st, realm := m.state(), r.URL.Query().Get("realm")
-		for name, e := range st.egress {
-			if st.exits[name].realm != realm {
-				continue
-			}
-			up, msg := e.up()
-			out.Exits[name] = exitState{Up: up, Error: msg}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(out)
-	})
-}
-
-// resolveLocal resolves name for one of this node's own exits of realm.
-func (m *Manager) resolveLocal(ctx context.Context, realm, exit, name string) resolveResponse {
-	e, err := m.selfExit(realm, exit)
-	if err != nil {
-		return resolveResponse{Error: err.Error()}
-	}
-	if up, msg := e.up(); !up {
-		return resolveResponse{Error: msg}
-	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	rcode, a, err := e.resolve(ctx, name)
-	if err != nil {
-		return resolveResponse{ExitUp: true, Error: err.Error()}
-	}
-	if len(a.Addrs) > 0 {
-		m.edges.prewarm(e, name, a.Addrs)
-	}
-	return resolveResponse{ExitUp: true, Rcode: rcode, Addrs: a.Addrs, TTL: int(a.TTL / time.Second)}
-}
-
-// selfExit returns one of this node's exits, provided it belongs to the
-// realm the request is for: a home node serving one realm can never use,
-// probe or relay through another realm's exit.
-func (m *Manager) selfExit(realm, exit string) (*egress, error) {
-	st := m.state()
-	e, ok := st.egress[exit]
-	switch {
-	case !ok:
-		return nil, fmt.Errorf("exit %q is not hosted on this node", exit)
-	case st.exits[exit].realm != realm && realm == "":
-		return nil, fmt.Errorf("exit %q belongs to a realm; the request names none", exit)
-	case st.exits[exit].realm != realm:
-		return nil, fmt.Errorf("exit %q is not hosted on this node for realm %q", exit, realm)
-	}
-	return e, nil
-}

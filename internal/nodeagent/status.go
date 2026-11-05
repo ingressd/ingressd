@@ -93,7 +93,6 @@ func (a *Agent) buildStatus(ctx context.Context) nodeproto.Status {
 		checks = append(checks, a.o.ExtraChecks(ctx)...)
 	}
 	st.Exits = hookExits()
-	st.SmartDNSServices = hookServices()
 	st.Mesh = hookMesh()
 	st.Checks = checks
 	st.Health = health(checks)
@@ -151,6 +150,11 @@ func (a *Agent) tunnelStatus(cfg *config.Config, now time.Time) []nodeproto.Tunn
 					ts.ConnectorVersion, ts.ConnectorInstall, ts.ConnectorOS, ts.ConnectorArch = h.Version, h.Install, h.OS, h.Arch
 					ts.ConnectorUpdate = connectorUpdateState(h.Update)
 					ts.ConnectorEdges = connectorEdges(h.Edges)
+					if sd := h.SmartDNS; sd != nil {
+						cp := *sd
+						cp.Recent = nil // sent on request (smartdns_recent_request)
+						ts.ConnectorSmartDNS = &cp
+					}
 				}
 			}
 		}

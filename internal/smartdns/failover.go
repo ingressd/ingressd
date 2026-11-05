@@ -4,7 +4,6 @@ package smartdns
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -21,8 +20,8 @@ import (
 // exit does not make the service's egress IP bounce.
 
 const (
-	// healthInterval is how often home nodes ask exit nodes for the health
-	// of the remote exits their services use (like the mesh probe).
+	// healthInterval is how often the connector asks exit nodes for the health
+	// of the node exits its services use.
 	healthInterval = 5 * time.Second
 	healthTimeout  = 4 * time.Second
 )
@@ -66,7 +65,7 @@ func (m *Manager) pruneActive(routes []route) {
 	}
 }
 
-func failbackAfter(st *state, r route) time.Duration { return st.failback(r.Realm) }
+func failbackAfter(st *state, _ route) time.Duration { return st.plan.FailbackAfter }
 
 // pick returns the exit new connections of r use, or errExitDown with every
 // exit's reason when none is up (fail closed).
@@ -197,24 +196,19 @@ func (m *Manager) Services() []nodeproto.ServiceStatus {
 	return out
 }
 
-// nodeRealm is an exit node as one realm sees it: its exits are asked for
-// per realm, and the exit node answers for that realm's exits only.
-type nodeRealm struct{ node, realm string }
-
-// usedRemoteExits maps each mesh node (per realm) to the remote exits that
-// some enabled service lists.
-func usedRemoteExits(st *state) map[nodeRealm][]string {
-	out := map[nodeRealm][]string{}
+// usedRemoteExits maps each exit node to the remote exits some enabled
+// service lists (usually one: a node has one exit).
+func usedRemoteExits(st *state) map[string][]string {
+	out := map[string][]string{}
 	seen := map[string]bool{}
 	for _, r := range st.allRoutes() {
 		for _, name := range r.Exits {
 			ex, ok := st.exit(name)
-			if !ok || ex.IsSelf() || seen[name] {
+			if !ok || ex.Egress != nil || seen[name] {
 				continue
 			}
 			seen[name] = true
-			k := nodeRealm{ex.Node, ex.realm}
-			out[k] = append(out[k], name)
+			out[ex.Node] = append(out[ex.Node], name)
 		}
 	}
 	for _, l := range out {
@@ -223,40 +217,33 @@ func usedRemoteExits(st *state) map[nodeRealm][]string {
 	return out
 }
 
-// pollExitHealth asks every exit node that hosts a used remote exit for its
-// exits' health and feeds remoteDown, so a home node knows an exit's VPN is
-// down before a client is handed a cached answer for it.
+// pollExitHealth asks every exit node a service uses for its exit's health
+// and feeds remoteDown, so the connector knows a node exit is down before a
+// client is handed a cached answer for it.
 func (m *Manager) pollExitHealth(ctx context.Context) {
+	if m.remote == nil {
+		return
+	}
 	st := m.state()
 	ctx, cancel := context.WithTimeout(ctx, healthTimeout)
 	defer cancel()
 	var wg sync.WaitGroup
-	for k, exits := range usedRemoteExits(st) {
-		node := k.node
+	for node, exits := range usedRemoteExits(st) {
 		if !m.remote.Up(node) {
-			continue // the mesh probe already holds these exits down
+			continue // the tunnel being down already holds these exits down
 		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			h, err := m.remote.Health(ctx, node, k.realm)
-			if errors.Is(err, errHealthUnsupported) {
-				m.noteHealthUnsupported(node, true)
-				return
-			}
-			if err != nil {
-				m.log.Debug("exit health poll failed", "node", node, "err", err)
-				return
-			}
-			m.noteHealthUnsupported(node, false)
+			h, err := m.remote.Health(ctx, node)
 			for _, exit := range exits {
-				switch e, ok := h[exit]; {
-				case !ok:
-					m.setRemoteDown(exit, true, fmt.Sprintf("exit %s is not hosted on node %s", exit, node))
-				case e.Up:
+				switch {
+				case err != nil:
+					m.setRemoteDown(exit, true, err.Error())
+				case h.Up:
 					m.setRemoteDown(exit, false, "")
 				default:
-					m.setRemoteDown(exit, true, e.Error)
+					m.setRemoteDown(exit, true, h.Error)
 				}
 			}
 		}()
@@ -264,20 +251,7 @@ func (m *Manager) pollExitHealth(ctx context.Context) {
 	wg.Wait()
 }
 
-func (m *Manager) noteHealthUnsupported(node string, unsupported bool) {
-	m.downMu.Lock()
-	defer m.downMu.Unlock()
-	if m.healthUnsupported[node] == unsupported {
-		return
-	}
-	if unsupported {
-		m.healthUnsupported[node] = true
-		m.log.Info("exit node does not report exit health; relying on the mesh probe and resolve answers", "node", node)
-	} else {
-		delete(m.healthUnsupported, node)
-	}
-}
-
+// runHealthPoll polls exit health every healthInterval until ctx ends.
 func (m *Manager) runHealthPoll(ctx context.Context) {
 	t := time.NewTicker(healthInterval)
 	defer t.Stop()

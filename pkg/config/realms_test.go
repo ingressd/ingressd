@@ -155,8 +155,8 @@ func TestRealmsValidation(t *testing.T) {
 			"access: is not allowed alongside realms"},
 		{"open tunnel input refused", func(c *Config) { c.Security.TunnelInput = "" },
 			"security.tunnel_input: must be restricted alongside realms"},
-		{"top-level smartdns refused", func(c *Config) { c.SmartDNS = &SmartDNS{} },
-			"smartdns: is not allowed alongside realms (it would serve every realm's tunnels); use realms.<name>.smartdns"},
+		{"node exit refused", func(c *Config) { c.SmartDNS = &SmartDNS{Exit: &SmartDNSNodeExit{Country: "NL"}} },
+			"smartdns.exit: is not allowed alongside realms (shared nodes host no exits)"},
 		{"protected app needs realm access", func(c *Config) { c.Realms["tq7k2m"] = Realm{} },
 			`realms.tq7k2m.access: is required: app "tq7k2m.nas" of this realm has access policies`},
 		{"realm without protected apps needs no access", func(c *Config) {
@@ -257,7 +257,7 @@ func TestTunnelTables(t *testing.T) {
 			c.Tunnels["home"] = h
 			return c
 		}(), "tunnels.home.table: only applies to remapped tunnels"},
-		{"below range", two(999, 0, "10.202.0.0/24"), "tunnels.home.table: must be 1000-1899 (tables from 1900 belong to Smart DNS VPN exits), got 999"},
+		{"below range", two(999, 0, "10.202.0.0/24"), "tunnels.home.table: must be 1000-1899, got 999"},
 		{"VPN range", two(1900, 0, "10.202.0.0/24"), "tunnels.home.table: must be 1000-1899"},
 		{"duplicate", two(1500, 1500, "10.202.0.0/24"), `tunnels.office.table: table 1500 is already used by tunnel "home"`},
 		// office sorts second: its implicit table is 1001.

@@ -38,8 +38,7 @@ const (
 	MaxTunnelNameLen = 12
 
 	// TunnelTableMin and TunnelTableMax bound the routing tables (and
-	// fwmarks) of remapped tunnels; Smart DNS VPN exits use the tables from
-	// TunnelTableMax+1 up.
+	// fwmarks) of remapped tunnels.
 	TunnelTableMin = 1000
 	TunnelTableMax = 1899
 )
@@ -143,6 +142,11 @@ type Tunnel struct {
 	// connector learns them from this node and links to every edge; this
 	// node never dials them.
 	Siblings []TunnelSibling `yaml:"siblings"`
+	// SmartDNS is a connector site's signed Smart DNS config
+	// (nodeproto.SignedSmartDNS as JSON). The node passes it to the
+	// connector unchanged; it can neither read the VPN configs inside nor
+	// change it without breaking the org signature.
+	SmartDNS string `yaml:"smartdns,omitempty"`
 }
 
 // TunnelSibling is one other node the tunnel's site is attached to.

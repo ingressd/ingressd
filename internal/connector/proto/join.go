@@ -27,6 +27,9 @@ type Join struct {
 	// node that issued them, so each edge may carry its own. DecodeJoin fills
 	// URL and CA from the first one when they are empty.
 	Edges []JoinEdge `json:"e,omitempty"`
+	// OrgKey is the org public key (base64 Ed25519) the connector pins to
+	// verify its signed Smart DNS config.
+	OrgKey string `json:"o,omitempty"`
 }
 
 // JoinEdge is one edge of a multi-edge join string.

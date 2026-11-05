@@ -235,7 +235,7 @@ func (c *Config) validateTunnelTables(v *validator, names []string) {
 		case t.VirtualPrefix == "":
 			v.add(p, "only applies to remapped tunnels (set virtual_prefix)")
 		case t.Table < TunnelTableMin || t.Table > TunnelTableMax:
-			v.add(p, "must be %d-%d (tables from %d belong to Smart DNS VPN exits), got %d", TunnelTableMin, TunnelTableMax, TunnelTableMax+1, t.Table)
+			v.add(p, "must be %d-%d, got %d", TunnelTableMin, TunnelTableMax, t.Table)
 		case dup:
 			v.add(p, "table %d is already used by tunnel %q", t.Table, other)
 		default:

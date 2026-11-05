@@ -20,9 +20,6 @@ type Realm struct {
 	// when the realm has protected apps.
 	Access *Access     `yaml:"access,omitempty"`
 	Shape  *RealmShape `yaml:"shape,omitempty"`
-	// SmartDNS is the realm's own resolver and relay, listening only on
-	// its tunnels' transit addresses (see SmartDNSScopes).
-	SmartDNS *SmartDNS `yaml:"smartdns,omitempty"`
 }
 
 // RealmShape caps a realm's bandwidth on this node.
@@ -137,9 +134,6 @@ func (c *Config) validateRealms(v *validator) {
 	}
 	if len(c.Edge.Admin.IPAllowlist) > 0 {
 		v.add("edge.admin.ip_allowlist", "is not allowed alongside realms")
-	}
-	if c.SmartDNS != nil {
-		v.add("smartdns", "is not allowed alongside realms (it would serve every realm's tunnels); use realms.<name>.smartdns")
 	}
 	if !c.TunnelInputRestricted() {
 		v.add("security.tunnel_input", "must be restricted alongside realms (open input lets every realm's sites reach the proxy and SSH through their tunnels)")

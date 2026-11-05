@@ -19,8 +19,8 @@ func TestTunnelInputRestrictedGolden(t *testing.T) {
 	}
 	golden(t, "rules-restricted.nft", renderNFT(cfg, nil, nil))
 
-	// Smart DNS on a transit address stays reachable from its own tunnel
-	// only; LAN listen addresses and mesh rules come after the tunnel drop.
+	// The node exit API stays reachable from its own site only, before the
+	// tunnel drop; mesh rules come after it.
 	sd, err := config.Parse([]byte(sdConfig + "security: { tunnel_input: restricted }\n"))
 	if err != nil {
 		t.Fatal(err)
@@ -30,12 +30,12 @@ func TestTunnelInputRestrictedGolden(t *testing.T) {
 	}
 	s := renderNFT(sd, nil, nil)
 	golden(t, "smartdns-restricted.nft", s)
-	drop := strings.Index(s, `iifname { "ix-home" } drop`)
-	if transit := strings.Index(s, `iifname "ix-home" ip daddr 10.100.1.1 meta l4proto { tcp, udp } th dport 53 accept`); transit < 0 || transit > drop {
-		t.Error("transit resolver rule missing or after the tunnel drop")
+	drop := strings.Index(s, `iifname { "ix-away", "ix-home", "ix-udm" } drop`)
+	if exit := strings.Index(s, `iifname "ix-home" ip saddr 10.100.1.2 ip daddr 10.100.1.1 tcp dport { 51901, 51902 } accept`); exit < 0 || exit > drop {
+		t.Error("exit API rule missing or after the tunnel drop")
 	}
-	if lan := strings.Index(s, `ip daddr 192.168.1.5 meta l4proto`); lan < drop {
-		t.Error("LAN listen rule before the tunnel drop")
+	if mesh := strings.Index(s, `iifname "ix-mesh"`); mesh < drop {
+		t.Error("mesh rule before the tunnel drop")
 	}
 	if !strings.Contains(s, "meta skuid != 0 meta l4proto tcp ip daddr { 169.254.0.0/16, 10.255.0.0/16 } drop") ||
 		!strings.Contains(s, "meta skuid != 0 meta l4proto tcp ip6 daddr { fd00:ec2::254/128 } drop") {
@@ -71,8 +71,5 @@ func TestExplicitTunnelTables(t *testing.T) {
 	}
 	if !strings.Contains(renderNFT(cfg, nil, nil), "10.202.0.0/24 : 1700") {
 		t.Error("explicit table not used as the fwmark")
-	}
-	if VPNRulePriorityBase <= TunnelRulePriority(config.TunnelTableMax) || VPNTableBase != config.TunnelTableMax+1 {
-		t.Error("tunnel tables or rules overlap the VPN exits' range")
 	}
 }

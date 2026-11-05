@@ -35,6 +35,10 @@ var TransparentSources func(cfg *config.Config, tunnel string) []string
 // mode: edge-endpoint.json). It is used when edge.admin.hostname is unset.
 var DefaultHost func() string
 
+// DefaultNodeID, if set, returns the node's panel id (managed nodes), sent
+// to connectors so they can name this edge as a Smart DNS exit.
+var DefaultNodeID func() string
+
 // TunnelConfig builds the connector-facing config for a tunnel.
 func TunnelConfig(cfg *config.Config, keys EdgeKeys, name string) (proto.TunnelConfig, error) {
 	t, ok := cfg.Tunnels[name]
@@ -59,6 +63,7 @@ func TunnelConfig(cfg *config.Config, keys EdgeKeys, name string) (proto.TunnelC
 	}
 	tc := proto.TunnelConfig{
 		Tunnel:        name,
+		Node:          nodeID(),
 		EdgePublicKey: pub,
 		Endpoint:      net.JoinHostPort(host, strconv.Itoa(t.ListenPort)),
 		Address:       netip.PrefixFrom(render.SiteAddr(transit), transit.Bits()).String(),
@@ -76,6 +81,9 @@ func TunnelConfig(cfg *config.Config, keys EdgeKeys, name string) (proto.TunnelC
 	}
 	if TransparentSources != nil {
 		tc.Transparent = TransparentSources(cfg, name)
+	}
+	if t.SmartDNS != "" && t.Site == config.SiteConnector {
+		tc.SmartDNS = json.RawMessage(t.SmartDNS)
 	}
 	b, _ := json.Marshal(tc)
 	sum := sha256.Sum256(b)
@@ -129,4 +137,11 @@ func hostPort(addr string) string {
 		}
 	}
 	return net.JoinHostPort(u.Hostname(), port)
+}
+
+func nodeID() string {
+	if DefaultNodeID == nil {
+		return ""
+	}
+	return DefaultNodeID()
 }

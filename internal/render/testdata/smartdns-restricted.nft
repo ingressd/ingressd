@@ -19,15 +19,14 @@ table inet ingressd {
 		ct state established,related accept
 		ct state invalid drop
 		iifname "lo" accept
-		iifname "ix-home" ip daddr 10.100.1.1 meta l4proto { tcp, udp } th dport 53 accept
-		iifname "ix-home" ip daddr 10.100.1.1 tcp dport { 51080, 51443 } accept
-		iifname { "ix-home" } drop
+		iifname "ix-away" ip saddr 10.100.2.2 ip daddr 10.100.2.1 tcp dport 51819 accept
+		iifname "ix-home" ip saddr 10.100.1.2 ip daddr 10.100.1.1 tcp dport 51819 accept
+		iifname "ix-home" ip saddr 10.100.1.2 ip daddr 10.100.1.1 tcp dport { 51901, 51902 } accept
+		iifname { "ix-away", "ix-home", "ix-udm" } drop
 		meta l4proto { icmp, ipv6-icmp } accept
 		tcp dport { 22, 80, 443 } accept
-		udp dport { 443, 51820, 51900 } accept
-		iifname "ix-mesh" ip saddr { 10.255.0.2 } tcp dport { 51901, 51902 } accept
-		ip saddr { 10.0.0.0/8, 100.64.0.0/10, 172.16.0.0/12, 192.168.0.0/16 } ip daddr 192.168.1.5 meta l4proto { tcp, udp } th dport 53 accept
-		ip saddr { 10.0.0.0/8, 100.64.0.0/10, 172.16.0.0/12, 192.168.0.0/16 } ip daddr 192.168.1.5 tcp dport { 51080, 51443 } accept
+		udp dport { 443, 51820, 51821, 51822, 51900 } accept
+		iifname "ix-mesh" ip saddr { 10.255.0.2 } tcp dport 51901 accept
 	}
 
 	chain forward {
@@ -43,13 +42,3 @@ table inet ingressd {
 }
 add table ip ingressd_smartdns
 delete table ip ingressd_smartdns
-
-table ip ingressd_smartdns {
-	chain prerouting {
-		type nat hook prerouting priority -100; policy accept;
-		ip daddr 10.100.1.1 tcp dport 443 dnat to 10.100.1.1:51443
-		ip daddr 10.100.1.1 tcp dport 80 dnat to 10.100.1.1:51080
-		ip daddr 192.168.1.5 tcp dport 443 dnat to 192.168.1.5:51443
-		ip daddr 192.168.1.5 tcp dport 80 dnat to 192.168.1.5:51080
-	}
-}

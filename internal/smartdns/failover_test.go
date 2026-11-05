@@ -8,7 +8,6 @@ import (
 	"errors"
 	"io"
 	"net"
-	"net/http/httptest"
 	"net/netip"
 	"slices"
 	"strings"
@@ -17,33 +16,26 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
 	"github.com/ingressd/ingressd/pkg/config"
 )
 
-const failoverConfig = `version: 1
-tunnels:
-  home: { site: router, listen_port: 51820, transit: 10.100.1.0/24 }
-mesh:
-  address: 10.255.0.1/16
-  peers:
-    nod_a: { public_key: "aEvqkSJVw/7cGUEcJXmeHiNFDLBGOz8GpScshecvNHU=", endpoint: "198.51.100.6:51900", address: 10.255.0.2/32 }
-    nod_b: { public_key: "bEvqkSJVw/7cGUEcJXmeHiNFDLBGOz8GpScshecvNHU=", endpoint: "198.51.100.7:51900", address: 10.255.0.3/32 }
-    nod_c: { public_key: "cEvqkSJVw/7cGUEcJXmeHiNFDLBGOz8GpScshecvNHU=", endpoint: "198.51.100.8:51900", address: 10.255.0.4/32 }
-    nod_d: { public_key: "dEvqkSJVw/7cGUEcJXmeHiNFDLBGOz8GpScshecvNHU=", endpoint: "198.51.100.9:51900", address: 10.255.0.5/32 }
-smartdns:
-  enabled: true
-  upstream: ["127.0.0.1:9"]
-  failback_after: 5m
-  exits:
-    gb-a: { node: nod_a, country: GB }
-    gb-b: { node: nod_b, country: GB }
-    gb-c: { node: nod_c, country: GB }
-    nl: { node: nod_d, country: NL }
-  services:
-    bbc: { domains: [bbc.example], exits: [gb-a, gb-b, gb-c] }
-`
+func failoverPlan() Plan {
+	return Plan{
+		Site:          "home",
+		Upstream:      []string{"127.0.0.1:9"},
+		FailbackAfter: 5 * time.Minute,
+		Exits: map[string]PlanExit{
+			"gb-a": {Node: "nod_a", Country: "GB"},
+			"gb-b": {Node: "nod_b", Country: "GB"},
+			"gb-c": {Node: "nod_c", Country: "GB"},
+			"nl":   {Node: "nod_d", Country: "NL"},
+		},
+		Services: map[string]config.SmartDNSSiteService{
+			"bbc": {Domains: []string{"bbc.example"}, Exits: []string{"gb-a", "gb-b", "gb-c"}},
+		},
+	}
+}
 
 type fakeClock struct {
 	mu sync.Mutex
@@ -64,18 +56,12 @@ func (c *fakeClock) add(d time.Duration) {
 
 func newFailoverManager(t *testing.T) (*Manager, *fakeExits, *fakeClock) {
 	t.Helper()
-	cfg, err := config.Parse([]byte(failoverConfig))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.Validate(); err != nil {
-		t.Fatal(err)
-	}
 	m := New(Options{})
 	clk := &fakeClock{t: time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)}
 	m.now = clk.now
 	fx := &fakeExits{
-		up: true, downNodes: map[string]bool{}, brokenNodes: map[string]bool{}, downExits: map[string]bool{},
+		up: true, exitOf: map[string]string{"nod_a": "gb-a", "nod_b": "gb-b", "nod_c": "gb-c", "nod_d": "nl"},
+		downNodes: map[string]bool{}, brokenNodes: map[string]bool{}, downExits: map[string]bool{},
 		exitAddrs: map[string][]netip.Addr{
 			"gb-a": addrs("192.0.2.1"),
 			"gb-b": addrs("198.51.100.1"),
@@ -83,15 +69,13 @@ func newFailoverManager(t *testing.T) (*Manager, *fakeExits, *fakeClock) {
 		},
 	}
 	m.remote = fx
-	m.dnsPort, m.tlsPort, m.httpPort = 0, 0, 0
-	m.Reconfigure(cfg, func(string) (string, error) { return "", errors.New("no secrets") })
-	m.listeners.closeAll()
+	m.Reconfigure(failoverPlan())
 	t.Cleanup(m.listeners.closeAll)
 	return m, fx, clk
 }
 
 func bbcRoute(m *Manager) route {
-	r, _ := m.state().scopes[0].match.match("bbc.example")
+	r, _ := m.state().match.match("bbc.example")
 	return r
 }
 
@@ -133,7 +117,7 @@ func TestFailoverOrderAndStickiness(t *testing.T) {
 		t.Errorf("resolved at %v, want gb-b", got)
 	}
 	s := m.Services()
-	if len(s) != 1 || s[0].Active != "gb-b" || !s[0].Failover || !strings.Contains(s[0].Message, "nod_a is unreachable") ||
+	if len(s) != 1 || s[0].Active != "gb-b" || !s[0].Failover || !strings.Contains(s[0].Message, "tunnel to exit node nod_a is down") ||
 		strings.Join(s[0].Exits, ",") != "gb-a,gb-b,gb-c" {
 		t.Errorf("status %+v", s)
 	}
@@ -161,7 +145,7 @@ func TestFailoverOrderAndStickiness(t *testing.T) {
 
 func TestFailbackImmediateWithZero(t *testing.T) {
 	m, fx, _ := newFailoverManager(t)
-	m.state().scopes[0].failback = 0
+	m.state().plan.FailbackAfter = 0
 	fx.set(func() { fx.downNodes["nod_a"] = true })
 	if got := activeOf(t, m); got != "gb-b" {
 		t.Fatalf("active %s", got)
@@ -215,7 +199,7 @@ func TestAllExitsDownFailsClosed(t *testing.T) {
 		t.Fatalf("every exit down: %v", r)
 	}
 	res := m.recent.list(1)[0].Result
-	for _, want := range []string{"SERVFAIL", "gb-a: exit node nod_a", "gb-b: exit node nod_b", "gb-c: exit node nod_c"} {
+	for _, want := range []string{"SERVFAIL", "gb-a: the tunnel to exit node nod_a", "gb-b: the tunnel to exit node nod_b", "gb-c: the tunnel to exit node nod_c"} {
 		if !strings.Contains(res, want) {
 			t.Errorf("result %q lacks %q", res, want)
 		}
@@ -245,8 +229,9 @@ func TestResolveFailsOverWithinOneQuery(t *testing.T) {
 	if up, msg := m.exitUp(m.state(), "gb-a"); up || !strings.Contains(msg, "vpn down") {
 		t.Errorf("gb-a up=%v %q", up, msg)
 	}
+}
 
-	// A mesh transport failure marks the node down and moves on too.
+func TestResolveTransportFailureFailsOver(t *testing.T) {
 	m2, fx2, _ := newFailoverManager(t)
 	fx2.set(func() { fx2.brokenNodes["nod_a"] = true })
 	if r := query(m2, "www.bbc.example", dns.TypeA); r.Rcode != dns.RcodeSuccess {
@@ -255,8 +240,8 @@ func TestResolveFailsOverWithinOneQuery(t *testing.T) {
 	if got := fx2.resolvedAt(); strings.Join(got, ",") != "gb-a,gb-b" {
 		t.Errorf("resolved at %v", got)
 	}
-	if fx2.Up("nod_a") {
-		t.Error("node not marked down after a transport failure")
+	if up, msg := m2.exitUp(m2.state(), "gb-a"); up || !strings.Contains(msg, "no route to host") {
+		t.Errorf("gb-a not marked down after a transport failure: %v %q", up, msg)
 	}
 }
 
@@ -352,8 +337,11 @@ func TestRelayTransportFailureRetries(t *testing.T) {
 	if got := relayGet(t, addr, "www.bbc.example"); got != "echo GET /x HTTP/1.1\r\n" {
 		t.Fatalf("got %q", got)
 	}
-	if exitsOf(connects()) != "gb-a,gb-b" || fx.Up("nod_a") {
-		t.Errorf("connects %v, nod_a up %v", exitsOf(connects()), fx.Up("nod_a"))
+	if exitsOf(connects()) != "gb-a,gb-b" {
+		t.Errorf("connects %v", exitsOf(connects()))
+	}
+	if up, msg := m.exitUp(m.state(), "gb-a"); up || !strings.Contains(msg, "connection refused") {
+		t.Errorf("gb-a not marked down: %v %q", up, msg)
 	}
 }
 
@@ -368,8 +356,8 @@ func TestRelayOtherRefusalNotRetried(t *testing.T) {
 	if got := relayGet(t, addr, "www.bbc.example"); got != "" {
 		t.Fatalf("relayed %q after a final refusal", got)
 	}
-	if exitsOf(connects()) != "gb-a" || m.errors.Load() != 1 {
-		t.Errorf("connects %v errors %d", exitsOf(connects()), m.errors.Load())
+	if exitsOf(connects()) != "gb-a" || m.err.Load() != 1 {
+		t.Errorf("connects %v errors %d", exitsOf(connects()), m.err.Load())
 	}
 	if got := activeOf(t, m); got != "gb-a" {
 		t.Errorf("a final refusal moved the service to %s", got)
@@ -431,15 +419,17 @@ func TestExitHealthPolling(t *testing.T) {
 	m, fx, _ := newFailoverManager(t)
 	var mu sync.Mutex
 	var polled []string
-	report := map[string]map[string]exitState{
-		"nod_a": {"gb-a": {Up: false, Error: "VPN tunnel ix-x-gb-a has no recent handshake"}},
-		"nod_b": {"gb-b": {Up: true}},
-		"nod_c": {}, // does not host gb-c (yet)
+	report := map[string]exitState{
+		"nod_a": {Up: false, Error: "egress 198.51.100.6 geolocates to DE, expected GB"},
+		"nod_b": {Up: true},
 	}
-	fx.health = func(node string) (map[string]exitState, error) {
+	fx.health = func(node string) (exitState, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		polled = append(polled, node)
+		if node == "nod_c" {
+			return exitState{}, errors.New("exit node answered HTTP 404")
+		}
 		return report[node], nil
 	}
 	m.pollExitHealth(context.Background())
@@ -448,23 +438,25 @@ func TestExitHealthPolling(t *testing.T) {
 		t.Errorf("polled %v (nod_d hosts no exit a service uses)", polled)
 	}
 	st := m.state()
-	if up, msg := m.exitUp(st, "gb-a"); up || !strings.Contains(msg, "no recent handshake") {
+	if up, msg := m.exitUp(st, "gb-a"); up || !strings.Contains(msg, "geolocates to DE") {
 		t.Errorf("gb-a %v %q", up, msg)
 	}
 	if up, _ := m.exitUp(st, "gb-b"); !up {
 		t.Error("gb-b down")
 	}
-	if up, msg := m.exitUp(st, "gb-c"); up || !strings.Contains(msg, "not hosted on node nod_c") {
+	// A node whose health cannot be read holds its exit down.
+	if up, msg := m.exitUp(st, "gb-c"); up || !strings.Contains(msg, "HTTP 404") {
 		t.Errorf("gb-c %v %q", up, msg)
 	}
 	if got := activeOf(t, m); got != "gb-b" {
 		t.Errorf("active %s", got)
 	}
 
-	// Unreachable nodes are left to the mesh probe.
+	// Nodes whose tunnel is down are not polled: that already holds their
+	// exits down.
 	mu.Lock()
 	polled = nil
-	report["nod_a"] = map[string]exitState{"gb-a": {Up: true}}
+	report["nod_a"] = exitState{Up: true}
 	mu.Unlock()
 	fx.set(func() { fx.downNodes["nod_c"] = true })
 	m.pollExitHealth(context.Background())
@@ -474,26 +466,6 @@ func TestExitHealthPolling(t *testing.T) {
 	}
 	if up, _ := m.exitUp(st, "gb-a"); !up {
 		t.Error("gb-a still down after the node reported it up")
-	}
-}
-
-func TestExitHealthUnsupportedFallsBack(t *testing.T) {
-	m, fx, _ := newFailoverManager(t)
-	fx.health = nil // old exit nodes answer 404
-	m.pollExitHealth(context.Background())
-	if !m.healthUnsupported["nod_a"] {
-		t.Error("404 not noted")
-	}
-	if got := activeOf(t, m); got != "gb-a" {
-		t.Fatalf("active %s: a 404 must not mark exits down", got)
-	}
-	// Today's signals still apply: exit_up:false on resolve.
-	fx.set(func() { fx.downExits["gb-a"] = true })
-	if r := query(m, "www.bbc.example", dns.TypeA); r.Rcode != dns.RcodeSuccess {
-		t.Fatalf("answer %v", r)
-	}
-	if got := activeOf(t, m); got != "gb-b" {
-		t.Errorf("active %s", got)
 	}
 }
 
@@ -514,64 +486,14 @@ func TestActiveStateAcrossReconfigure(t *testing.T) {
 	fx.set(func() { fx.downNodes["nod_a"] = true })
 	activeOf(t, m)
 	fx.set(func() { delete(fx.downNodes, "nod_a") })
-	cfg := m.state().cfg
-	m.Reconfigure(cfg, func(string) (string, error) { return "", errors.New("no secrets") })
-	m.listeners.closeAll()
+	m.Reconfigure(failoverPlan())
 	if got := activeOf(t, m); got != "gb-b" {
 		t.Errorf("unchanged list: active %s, want the sticky gb-b", got)
 	}
-	cfg2 := *cfg
-	sd := *cfg.SmartDNS
-	sd.Services = map[string]config.SmartDNSService{"bbc": {Domains: []string{"bbc.example"}, Exits: []string{"gb-a", "gb-c"}}}
-	cfg2.SmartDNS = &sd
-	m.Reconfigure(&cfg2, func(string) (string, error) { return "", errors.New("no secrets") })
-	m.listeners.closeAll()
+	p := failoverPlan()
+	p.Services = map[string]config.SmartDNSSiteService{"bbc": {Domains: []string{"bbc.example"}, Exits: []string{"gb-a", "gb-c"}}}
+	m.Reconfigure(p)
 	if got := activeOf(t, m); got != "gb-a" {
 		t.Errorf("changed list: active %s, want a fresh choice", got)
-	}
-}
-
-func TestExitRelaySetsExitDown(t *testing.T) {
-	m, _ := newTestManager(t, fakeUpstream(t, "203.0.113.5"))
-	cfg := *m.state().cfg
-	mc := *cfg.Mesh
-	mc.Peers = map[string]config.MeshPeer{"nod_nl": {PublicKey: "eEvqkSJVw/7cGUEcJXmeHiNFDLBGOz8GpScshecvNHU=", Address: "127.0.0.1/32"}}
-	cfg.Mesh = &mc
-	m.mesh.Reconfigure(&cfg)
-	defer m.mesh.Reconfigure(nil)
-	e := m.state().egress["home"]
-	e.ifname = "ix-x-home"
-	e.device = func(string) (*wgtypes.Device, error) { return nil, errors.New("no such device") }
-	c, err := m.listenExitRelay("127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
-	addr := c.(net.Listener).Addr().String()
-	for _, tc := range []struct {
-		req      ConnectRequest
-		exitDown bool
-	}{
-		{ConnectRequest{Exit: "home", Host: "tv.stream.example", Port: 443, Addrs: addrs("192.0.2.20")}, true},
-		{ConnectRequest{Exit: "home", Host: "tv.stream.example", Port: 22, Addrs: addrs("192.0.2.20")}, false},
-	} {
-		conn, err := net.Dial("tcp", addr)
-		if err != nil {
-			t.Fatal(err)
-		}
-		conn.SetDeadline(time.Now().Add(3 * time.Second))
-		WriteConnectRequest(conn, tc.req)
-		resp, err := ReadConnectResponse(conn)
-		conn.Close()
-		if err != nil || resp.OK || resp.ExitDown != tc.exitDown {
-			t.Errorf("%+v: %+v, %v", tc.req, resp, err)
-		}
-	}
-
-	// GET /v1/exits reports the same.
-	w := httptest.NewRecorder()
-	m.exitsHandler().ServeHTTP(w, httptest.NewRequest("GET", "/v1/exits", nil))
-	if !strings.Contains(w.Body.String(), `"home":{"up":false,"error":"VPN interface ix-x-home: no such device"}`) {
-		t.Errorf("/v1/exits %s", w.Body.String())
 	}
 }

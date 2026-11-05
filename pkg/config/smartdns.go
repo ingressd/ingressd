@@ -2,31 +2,33 @@
 
 package config
 
-// Smart DNS and node mesh configuration (docs/rev1/ARCHITECTURE.md §7).
-// The panel compiles these sections into each node's config; the smartdns
-// work stream owns their validation (validateSmartDNS / validateMesh).
+// Smart DNS (docs/rev1/CONNECTOR-SMARTDNS.md). The resolver, relay and VPN
+// exits run on the connector; a node only lets its own connector sites
+// leave from its public IP (SmartDNS.Exit) and passes each connector site's
+// signed Smart DNS config through (Tunnel.SmartDNS).
 
-// SmartDNS runs the resolver and SNI relay on this node for its sites.
+// SmartDNS is the node's part of Smart DNS.
 type SmartDNS struct {
-	Enabled bool `yaml:"enabled"`
-	// Listen are the addresses the resolver (:53) and relay (:80/:443)
-	// bind; default: every tunnel's edge transit address, so they are only
-	// reachable from the homes, never from the internet.
-	Listen []string `yaml:"listen"`
-	// Upstream resolvers for names that are not routed (default 1.1.1.1, 9.9.9.9).
-	Upstream []string `yaml:"upstream"`
-	// Services route their domains through an exit, keyed by service name.
-	Services map[string]SmartDNSService `yaml:"services"`
-	// Exits are egress points, keyed by exit name.
-	Exits map[string]SmartDNSExit `yaml:"exits"`
+	// Exit, when set, lets the listed connector sites egress from this
+	// node's own route (its public IP) for their Smart DNS services.
+	Exit *SmartDNSNodeExit `yaml:"exit,omitempty"`
+}
+
+// SmartDNSNodeExit is a node exit: no VPN, no routing changes, just the
+// node's default route.
+type SmartDNSNodeExit struct {
+	// Country is the ISO 3166-1 alpha-2 country the node's IP is expected
+	// to geolocate to; the exit reports itself down when it does not.
+	Country string `yaml:"country"`
+	// Sites are the connector tunnels allowed to use the exit.
+	Sites []string `yaml:"sites"`
+	// Upstream resolves service names from the node's location (default
+	// 1.1.1.1, 9.9.9.9).
+	Upstream []string `yaml:"upstream,omitempty"`
 	// Checks are edge location checks for services on CDNs whose edges
-	// geolocate viewers themselves (see internal/smartdns/edgecheck.go).
-	// The panel fills them in from its service catalog.
-	Checks []SmartDNSCheck `yaml:"checks"`
-	// FailbackAfter is how long a service's preferred exit must stay
-	// healthy before connections move back to it from a fallback exit
-	// (default 5m, 0 = at once, at most 1h).
-	FailbackAfter *Duration `yaml:"failback_after,omitempty"`
+	// geolocate viewers themselves; the panel fills them in from its
+	// catalog.
+	Checks []SmartDNSCheck `yaml:"checks,omitempty"`
 }
 
 // SmartDNSCheck asks a CDN edge which country it places an exit in: an
@@ -34,53 +36,64 @@ type SmartDNS struct {
 // JSON response holds the ISO country code in Field.
 type SmartDNSCheck struct {
 	// Domains are the service domain suffixes whose upstream IPs are checked.
-	Domains []string `yaml:"domains"`
-	Host    string   `yaml:"host"`
-	Path    string   `yaml:"path"`
-	Field   string   `yaml:"field"`
+	Domains []string `yaml:"domains" json:"domains"`
+	Host    string   `yaml:"host" json:"host"`
+	Path    string   `yaml:"path" json:"path"`
+	Field   string   `yaml:"field" json:"field"`
 	// CacheBuster, if set, is a query parameter given a random value so
 	// CDN-cached endpoints answer for this request.
-	CacheBuster string `yaml:"cache_buster,omitempty"`
+	CacheBuster string `yaml:"cache_buster,omitempty" json:"cache_buster,omitempty"`
 }
 
-type SmartDNSService struct {
-	Domains []string `yaml:"domains"` // suffix match: "example.com" covers "tv.example.com"
-	// Exit is the single-exit form of Exits, kept for older panels; it is
-	// normalised into Exits when the config is loaded.
-	Exit string `yaml:"exit,omitempty"`
-	// Exits are the service's exits in order of preference (1 to 4, all in
-	// the same country): new connections use the first healthy one.
-	Exits   []string `yaml:"exits,omitempty"`
-	Enabled *bool    `yaml:"enabled"` // default true
-	Catalog string   `yaml:"catalog"` // catalog entry id the domains came from, informational
+// Exit locations of a connector site's exits (SmartDNSSiteExit.At).
+const (
+	// ExitAtConnector egresses through a VPN config on the connector.
+	ExitAtConnector = "connector"
+	// ExitAtNode egresses from one of the site's own nodes' public IP.
+	ExitAtNode = "node"
+	// ExitAtOperator is reserved for exits run by the network operator;
+	// it is refused.
+	ExitAtOperator = "operator"
+)
+
+// SmartDNSSite is a connector site's Smart DNS config. The panel signs it
+// (nodeproto.SignedSmartDNS) and nodes hand it to the connector unchanged.
+type SmartDNSSite struct {
+	// Listen is the connector host's LAN IPv4 address the resolver (53)
+	// and relay (80, 443) bind; empty: the address of the interface
+	// holding the default route.
+	Listen string `json:"listen,omitempty"`
+	// ForwardAll makes the connector a full resolver: names no service
+	// routes are forwarded to Upstream instead of refused.
+	ForwardAll bool     `json:"forward_all,omitempty"`
+	Upstream   []string `json:"upstream,omitempty"`
+	// FailbackAfter is how long a service's preferred exit must stay
+	// healthy before connections move back to it (Go duration, default
+	// 5m, at most 1h).
+	FailbackAfter string                         `json:"failback_after,omitempty"`
+	Services      map[string]SmartDNSSiteService `json:"services"`
+	Exits         map[string]SmartDNSSiteExit    `json:"exits"`
+	Checks        []SmartDNSCheck                `json:"checks,omitempty"`
 }
 
-type SmartDNSExit struct {
-	// Node is the mesh peer (node id) that egresses, or "self".
-	Node    string `yaml:"node"`
-	Country string `yaml:"country"` // ISO 3166-1 alpha-2, expected egress country
-	// VPN optionally names a secret (secret://name) holding a WireGuard
-	// .conf; the exit node egresses through that tunnel instead of its own
-	// IP. Only used on the exit node itself.
-	VPN string `yaml:"vpn"`
-	// Table pins a VPN exit's routing table and fwmark (VPNTableMin to
-	// VPNTableMax), so adding or removing another exit never renumbers it.
-	// Required in a realm; 0 elsewhere means VPNTableMin + the exit's index
-	// among the VPN exits in name order.
-	Table int `yaml:"table,omitempty"`
+// SmartDNSSiteService routes its domains (suffix match) through its exits,
+// in order of preference.
+type SmartDNSSiteService struct {
+	Domains []string `json:"domains"`
+	Exits   []string `json:"exits"`
+	Enabled *bool    `json:"enabled,omitempty"` // default true
+	Catalog string   `json:"catalog,omitempty"` // informational
 }
 
-// Mesh connects the nodes of one org over WireGuard.
-type Mesh struct {
-	// Address is this node's mesh address with prefix, e.g. 10.255.0.1/16.
-	Address    string              `yaml:"address"`
-	ListenPort int                 `yaml:"listen_port"` // default 51900
-	Peers      map[string]MeshPeer `yaml:"peers"`       // keyed by node id
+// SmartDNSSiteExit is one egress point of a connector site.
+type SmartDNSSiteExit struct {
+	At      string `json:"at"`             // ExitAtConnector or ExitAtNode
+	Node    string `json:"node,omitempty"` // at node: the node id (one of the site's edges)
+	Country string `json:"country"`
+	// VPN is the WireGuard .conf of a connector exit, age-encrypted to the
+	// connector's recipient (ASCII armor), so no node can read it.
+	VPN string `json:"vpn,omitempty"`
 }
 
-type MeshPeer struct {
-	PublicKey string `yaml:"public_key"`
-	Endpoint  string `yaml:"endpoint"` // host:port of the peer's mesh listener
-	Address   string `yaml:"address"`  // peer's mesh address (/32)
-	Name      string `yaml:"name"`     // human name, informational
-}
+// IsEnabled reports whether a service is enabled (default true).
+func (s SmartDNSSiteService) IsEnabled() bool { return s.Enabled == nil || *s.Enabled }

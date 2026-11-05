@@ -627,7 +627,15 @@ func (e *edge) reportLoop(ctx context.Context) {
 		}
 		h.Reachability = testReachability(ctx, e.s.stateCopy().Targets())
 		h.Edges = e.s.edgeReports()
-		if err := e.postJSON(ctx, proto.ReportPath, h); err != nil && ctx.Err() == nil && !errors.Is(err, errNoPath) {
+		if sd := e.s.r.sd; sd != nil {
+			h.SmartDNS = sd.report()
+			h.SmartDNSUsage = sd.takeUsage()
+		}
+		err := e.postJSON(ctx, proto.ReportPath, h)
+		if err != nil && e.s.r.sd != nil {
+			e.s.r.sd.returnUsage(h.SmartDNSUsage)
+		}
+		if err != nil && ctx.Err() == nil && !errors.Is(err, errNoPath) {
 			e.s.log.Warn("health report", "edge", e.label(), "err", err)
 		}
 	}

@@ -175,7 +175,7 @@ func newRootCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), "ingressd-connector", version.String())
 			},
 		},
-		enroll, run, status, install, newDiscoverCmd(&statePath), newUpgradeHelperCmd(), newVerifySumsCmd(),
+		enroll, run, status, install, newDiscoverCmd(&statePath), newSmartDNSCmd(&statePath), newUpgradeHelperCmd(), newVerifySumsCmd(),
 	)
 	return root
 }

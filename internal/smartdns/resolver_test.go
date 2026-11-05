@@ -20,7 +20,7 @@ import (
 	"github.com/ingressd/ingressd/pkg/config"
 )
 
-// fakeExits stands in for exits on other nodes.
+// fakeExits stands in for node exits.
 type fakeExits struct {
 	mu       sync.Mutex
 	up       bool
@@ -30,25 +30,24 @@ type fakeExits struct {
 	exitErr  string // the exit's resolver failed
 	exitDown bool
 	resolves int
-	markDown int
 	connect  func(req ConnectRequest) (net.Conn, error)
 
 	// Per node and per exit behaviour for failover tests (nil: unused).
-	downNodes   map[string]bool         // unreachable over the mesh; MarkDown adds to it
-	brokenNodes map[string]bool         // transport fails while the mesh probe still says up
+	exitOf      map[string]string       // node -> the exit it hosts
+	downNodes   map[string]bool         // tunnel to the node is down
+	brokenNodes map[string]bool         // transport fails while the tunnel still says up
 	downExits   map[string]bool         // the exit node reports these exits down
 	exitAddrs   map[string][]netip.Addr // what each exit resolves names to
 	resolved    []string                // exit of every Resolve call
-	realms      []string                // realm of every Resolve call
-	health      func(node string) (map[string]exitState, error)
+	health      func(node string) (exitState, error)
 }
 
-func (f *fakeExits) Resolve(_ context.Context, node, realm, exit, name string) (resolveResponse, error) {
+func (f *fakeExits) Resolve(_ context.Context, node, name string) (resolveResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.resolves++
+	exit := cmp.Or(f.exitOf[node], node)
 	f.resolved = append(f.resolved, exit)
-	f.realms = append(f.realms, realm)
 	if f.resErr != nil || f.downNodes[node] || f.brokenNodes[node] {
 		return resolveResponse{}, cmp.Or(f.resErr, errors.New("no route to host"))
 	}
@@ -64,13 +63,13 @@ func (f *fakeExits) Resolve(_ context.Context, node, realm, exit, name string) (
 	return resolveResponse{ExitUp: true, Rcode: f.rcode, Addrs: f.addrs, TTL: 60}, nil
 }
 
-func (f *fakeExits) Connect(_ context.Context, node string, req ConnectRequest) (net.Conn, error) {
+func (f *fakeExits) Connect(_ context.Context, _ string, req ConnectRequest) (net.Conn, error) {
 	return f.connect(req)
 }
 
-func (f *fakeExits) Health(_ context.Context, node, _ string) (map[string]exitState, error) {
+func (f *fakeExits) Health(_ context.Context, node string) (exitState, error) {
 	if f.health == nil {
-		return nil, errHealthUnsupported
+		return exitState{Up: true}, nil
 	}
 	return f.health(node)
 }
@@ -79,17 +78,6 @@ func (f *fakeExits) Up(node string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.up && !f.downNodes[node]
-}
-
-func (f *fakeExits) MarkDown(node string, _ error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.markDown++
-	if f.downNodes != nil {
-		f.downNodes[node] = true
-	} else {
-		f.up = false
-	}
 }
 
 func (f *fakeExits) set(fn func()) {
@@ -125,39 +113,30 @@ func fakeUpstream(t *testing.T, answerIP string) string {
 	return pc.LocalAddr().String()
 }
 
-const testConfig = `version: 1
-tunnels:
-  home: { site: router, listen_port: 51820, transit: 10.100.1.0/24 }
-mesh:
-  address: 10.255.0.1/16
-  peers:
-    nod_nl: { public_key: "eEvqkSJVw/7cGUEcJXmeHiNFDLBGOz8GpScshecvNHU=", endpoint: "198.51.100.6:51900", address: 10.255.0.2/32 }
-smartdns:
-  enabled: true
-  upstream: [UPSTREAM]
-  exits:
-    nl: { node: nod_nl, country: NL }
-    home: { node: self, country: GB }
-  services:
-    streamtv: { domains: [stream.example, streamtv.example], exit: nl }
-    local: { domains: [local.test], exit: home }
-`
+// testPlan routes streamtv through a node exit and local through a local
+// exit on the host's own route.
+func testPlan(upstream string) Plan {
+	return Plan{
+		Site:       "home",
+		ForwardAll: true,
+		Upstream:   []string{upstream},
+		Exits: map[string]PlanExit{
+			"nl":   {Node: "nod_nl", Country: "NL"},
+			"home": {Country: "GB", Egress: &EgressOptions{DNS: []string{upstream}}},
+		},
+		Services: map[string]config.SmartDNSSiteService{
+			"streamtv": {Domains: []string{"stream.example", "streamtv.example"}, Exits: []string{"nl"}},
+			"local":    {Domains: []string{"local.test"}, Exits: []string{"home"}},
+		},
+	}
+}
 
 func newTestManager(t *testing.T, upstream string) (*Manager, *fakeExits) {
 	t.Helper()
-	cfg, err := config.Parse([]byte(strings.Replace(testConfig, "UPSTREAM", `"`+upstream+`"`, 1)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.Validate(); err != nil {
-		t.Fatal(err)
-	}
 	m := New(Options{})
 	fx := &fakeExits{up: true, addrs: addrs("192.0.2.20", "192.0.2.21")}
 	m.remote = fx
-	m.dnsPort, m.tlsPort, m.httpPort = 0, 0, 0
-	m.Reconfigure(cfg, func(string) (string, error) { return "", errors.New("no secrets") })
-	m.listeners.closeAll() // tests call answer/handlers directly
+	m.Reconfigure(testPlan(upstream))
 	t.Cleanup(m.listeners.closeAll)
 	return m, fx
 }
@@ -237,6 +216,23 @@ func TestNonServiceGoesUpstream(t *testing.T) {
 	}
 }
 
+func TestNonServiceRefusedWithoutForwardAll(t *testing.T) {
+	m, fx := newTestManager(t, fakeUpstream(t, "203.0.113.5"))
+	p := testPlan(fakeUpstream(t, "203.0.113.5"))
+	p.ForwardAll = false
+	m.Reconfigure(p)
+	if r := query(m, "www.bbc.co.uk", dns.TypeA); r.Rcode != dns.RcodeRefused || len(r.Answer) != 0 {
+		t.Fatalf("answer %v", r)
+	}
+	if res := m.recent.list(1)[0].Result; !strings.Contains(res, "not a service name") {
+		t.Errorf("result %q", res)
+	}
+	// Service names are still answered.
+	if r := query(m, "tv.stream.example", dns.TypeA); r.Rcode != dns.RcodeSuccess || fx.resolves != 1 {
+		t.Errorf("service name: %v (resolves %d)", r, fx.resolves)
+	}
+}
+
 func TestFailClosedWhenExitDown(t *testing.T) {
 	m, fx := newTestManager(t, fakeUpstream(t, "203.0.113.5"))
 	query(m, "tv.stream.example", dns.TypeA) // cache it
@@ -250,13 +246,10 @@ func TestFailClosedWhenExitDown(t *testing.T) {
 		t.Errorf("down exit asked %d times", fx.resolves)
 	}
 
-	// A transport failure fails closed and marks the node down.
+	// A transport failure fails closed.
 	fx.up, fx.resErr = true, errors.New("connection refused")
 	if r := query(m, "id.stream.example", dns.TypeA); r.Rcode != dns.RcodeServerFailure {
 		t.Errorf("transport failure: %v", r)
-	}
-	if fx.markDown != 1 {
-		t.Errorf("markDown = %d", fx.markDown)
 	}
 
 	// The exit node reports its VPN down: fail closed, even if cached.
@@ -419,41 +412,5 @@ func TestRelayToRemoteExit(t *testing.T) {
 	conn.Close()
 	if len(b) != 0 {
 		t.Errorf("relayed with exit down: %q", b)
-	}
-}
-
-func TestExitRelayRefusals(t *testing.T) {
-	m, _ := newTestManager(t, fakeUpstream(t, "203.0.113.5"))
-	cfg := *m.state().cfg
-	mc := *cfg.Mesh
-	mc.Peers = map[string]config.MeshPeer{"nod_nl": {PublicKey: "eEvqkSJVw/7cGUEcJXmeHiNFDLBGOz8GpScshecvNHU=", Address: "127.0.0.1/32"}}
-	cfg.Mesh = &mc
-	m.mesh.Reconfigure(&cfg)
-	defer m.mesh.Reconfigure(nil)
-	c, err := m.listenExitRelay("127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
-	addr := c.(net.Listener).Addr().String()
-	for _, tc := range []struct {
-		req  ConnectRequest
-		want string
-	}{
-		{ConnectRequest{Exit: "nl", Host: "tv.stream.example", Port: 443, Addrs: addrs("192.0.2.20")}, "not hosted on this node"},
-		{ConnectRequest{Exit: "home", Host: "tv.stream.example", Port: 443, Addrs: addrs("192.168.1.1")}, "not a public address"},
-		{ConnectRequest{Exit: "home", Host: "tv.stream.example", Port: 22, Addrs: addrs("192.0.2.20")}, "port 22"},
-	} {
-		conn, err := net.Dial("tcp", addr)
-		if err != nil {
-			t.Fatal(err)
-		}
-		conn.SetDeadline(time.Now().Add(3 * time.Second))
-		WriteConnectRequest(conn, tc.req)
-		resp, err := ReadConnectResponse(conn)
-		conn.Close()
-		if err != nil || resp.OK || !strings.Contains(resp.Error, tc.want) {
-			t.Errorf("%+v: %+v, %v (want %q)", tc.req, resp, err, tc.want)
-		}
 	}
 }

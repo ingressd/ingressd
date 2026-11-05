@@ -39,8 +39,6 @@ tunnels:
     vendor: unifi
     listen_port: 51824
     transit: 100.64.0.68/30
-smartdns:
-  enabled: true
 `
 
 func TestMultiPopTransitsValid(t *testing.T) {
@@ -54,13 +52,8 @@ func TestMultiPopTransitsValid(t *testing.T) {
 		s[0].Priority != 1 || s[0].PoP != "ams" || s[1].Priority != 0 {
 		t.Fatalf("siblings: %+v", s)
 	}
-	// The Smart DNS resolver listens on each /30's edge address (.1).
-	var got []string
-	for _, a := range c.SmartDNSListen() {
-		got = append(got, a.String())
-	}
-	if strings.Join(got, ",") != "100.64.0.5,100.64.0.69" {
-		t.Errorf("smart DNS listen = %v", got)
+	if a, _ := c.TransitEdgeAddr("home"); a.String() != "100.64.0.5" {
+		t.Errorf("edge transit address = %v", a)
 	}
 }
 

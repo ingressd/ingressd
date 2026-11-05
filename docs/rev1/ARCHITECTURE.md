@@ -110,6 +110,8 @@ Known rev1 limitations (also documented in the panel's security page):
 
 ## 7. Exit routing (`smartdns`) in rev1
 
+> **Superseded (2026-11-05).** The home side (resolver and relay) moves from the edge to the connector, and edges keep only the exit role behind a tunnel exit API. This section describes the current code until that lands: see [CONNECTOR-SMARTDNS.md](CONNECTOR-SMARTDNS.md).
+
 - **Exits are nodes.** An exit = (node, country, optional VPN WireGuard config). The exit node can also bind egress to a VPN interface (as an earlier prototype did).
 - **Mesh**: the panel gives every node in an org a WireGuard mesh address (e.g. `10.255.<n>.<m>`) and peers; nodes bring up interface `ix-mesh` (config section `mesh`).
 - **Flow**: home UDM forwards service domains to the resolver on its **home node's tunnel transit IP**. The resolver asks the **exit node** (over the mesh) to resolve the name *from the exit's location* and returns the home node's own transit IP. The home device connects to the home node on 443/80; the relay reads SNI/Host and forwards the stream over the mesh to the exit node's relay, which connects to the destination (optionally via the VPN interface). TLS stays end to end.
@@ -201,7 +203,7 @@ Validation: `mesh` is required, `secret` is a secret reference, `listen_mesh` or
 
 The forward listener is a second Caddy server bound to the mesh address only, opened by nftables to `ix-mesh` from mesh peers (in restricted mode the output chain lets the unprivileged proxy reach the siblings' port 51880, nothing else on the mesh). Its first handler, `edge_forward_verify`, refuses (403) a missing, malformed or wrongly signed hop, one older or newer than 30 s, one signed by a node that is not a mesh peer or that is not the connection's source address, and answers 508 to a hop signed by itself. A valid hop selects the route of the app it names, which proxies to that app's local tunnel origins only: no `edge_auth`, WAF, cache or rate limits (the first node enforced them), no siblings, and the transport refuses to forward a request that came through a forward listener, so a request makes at most one hop. With realms the app key names the realm, and an app's origins are validated to be its own realm's tunnels, so the listener can only reach the same realm's tunnels. TLS terminates on the first node; the listener trusts the peers' `X-Forwarded-For` (static trusted proxies), so the origin sees the visitor first, then the forwarding node. The listener keeps no access log: a forwarded request is logged and metered once, on the first node.
 
-**Per-realm Smart DNS** (`realms.<r>.smartdns`, MANAGED.md §10). A realm carries a block with the schema of top-level `smartdns` (services, exits, checks, failback_after, upstream, listen); top-level `smartdns` stays refused alongside realms.
+**Per-realm Smart DNS** (`realms.<r>.smartdns`). *To be removed: shared nodes will run no Smart DNS ([CONNECTOR-SMARTDNS.md](CONNECTOR-SMARTDNS.md)).* A realm carries a block with the schema of top-level `smartdns` (services, exits, checks, failback_after, upstream, listen); top-level `smartdns` stays refused alongside realms.
 
 ```yaml
 realms:

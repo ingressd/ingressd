@@ -20,6 +20,7 @@ import (
 
 	"github.com/ingressd/ingressd/internal/connector"
 	"github.com/ingressd/ingressd/internal/connector/proto"
+	"github.com/ingressd/ingressd/internal/nodeagent"
 	"github.com/ingressd/ingressd/internal/secrets"
 	"github.com/ingressd/ingressd/internal/tunnel"
 	"github.com/ingressd/ingressd/pkg/config"
@@ -42,6 +43,12 @@ var (
 func connectorServer(e *env) *connector.Server {
 	connOnce.Do(func() {
 		connector.DefaultHost = e.machineHost
+		connector.DefaultNodeID = func() string {
+			if st, err := nodeagent.LoadState(e.stateDir); err == nil {
+				return st.NodeID
+			}
+			return ""
+		}
 		connSrv = &connector.Server{
 			Store: connector.NewStore(e.stateDir),
 			Log:   slog.New(slog.NewTextHandler(os.Stderr, nil)),

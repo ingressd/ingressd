@@ -3,6 +3,7 @@
 package client
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -60,6 +61,8 @@ type Runner struct {
 	NoDiscovery bool
 
 	upd *updater // self-update state, kept across link restarts (update.go)
+	// sd runs Smart DNS, kept across link restarts (smartdns.go).
+	sd *sdController
 }
 
 // errRestart asks Run to rebuild the link after a config change.
@@ -70,6 +73,9 @@ var errRestart = errors.New("tunnel config changed")
 func (r *Runner) Run(ctx context.Context) error {
 	if r.Log == nil {
 		r.Log = slog.Default()
+	}
+	if r.sd == nil {
+		r.sd = newSDController(ctx, r.StatePath, r.Log)
 	}
 	if err := SecureStateDir(r.StatePath); err != nil {
 		// Not fatal: the upgrade helper refuses plans it cannot trust
@@ -141,6 +147,15 @@ func (r *Runner) runOnce(ctx context.Context) error {
 	if s.priv, err = wgtypes.ParseKey(st.PrivateKey); err != nil {
 		return fmt.Errorf("state private key: %w", err)
 	}
+	ageID, created, err := ensureAgeIdentity(st)
+	if err != nil {
+		return fmt.Errorf("state age identity: %w", err)
+	}
+	if created {
+		if err := st.Save(r.StatePath); err != nil {
+			return err
+		}
+	}
 	switch s.mode {
 	case ModeTUN:
 		s.link, err = openTUN(st, s.priv, s.log)
@@ -160,6 +175,10 @@ func (r *Runner) runOnce(ctx context.Context) error {
 	defer cancel(nil)
 	s.restart = cancel
 	s.reconcile(ctx)
+	if r.sd != nil {
+		r.sd.attach(s, ageID)
+		defer r.sd.detach(s)
+	}
 	s.manage(ctx)
 	s.mu.Lock()
 	edges := make([]*edge, 0, len(s.edges))
@@ -428,6 +447,9 @@ func (s *session) applyEdgeConfig(e *edge, tc proto.TunnelConfig) {
 	before := sharedSettings(s.st)
 	old := es.Config
 	es.Config, es.LastSeen = tc, time.Now().UTC()
+	if tc.Node != "" {
+		es.Node = tc.Node
+	}
 	after := sharedSettings(s.st)
 	if err := s.st.Save(s.r.StatePath); err != nil {
 		s.log.Warn("save state", "err", err)
@@ -442,6 +464,9 @@ func (s *session) applyEdgeConfig(e *edge, tc proto.TunnelConfig) {
 		s.log.Info("shared tunnel settings changed", "edge", e.label(), "revision", tc.Revision)
 		s.restart(errRestart)
 		return
+	}
+	if s.r.sd != nil && !bytes.Equal(old.SmartDNS, tc.SmartDNS) {
+		go s.r.sd.update()
 	}
 	if old.Revision != tc.Revision {
 		s.log.Info("tunnel config updated", "edge", e.label(), "revision", tc.Revision, "siblings", len(tc.Siblings))

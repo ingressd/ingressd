@@ -2,6 +2,8 @@
 
 Status: implemented (node); the panel part (§8) is not. Extends [ARCHITECTURE.md §7](ARCHITECTURE.md#7-exit-routing-smartdns-in-rev1).
 
+> **Moving to the connector (2026-11-05).** The failover rules here (ordered exits, stickiness, `failback_after`, fail closed, retry only before the first client byte) are kept, but are evaluated by the connector, and exits are reached over the connector's tunnel instead of the mesh. §5.4 (several home nodes) and §9 (managed network) no longer apply. See [CONNECTOR-SMARTDNS.md](CONNECTOR-SMARTDNS.md).
+
 ## 1. Problem
 
 A service routes through exactly one exit (`smartdns.services.<name>.exit` is a single name), and an exit egresses on exactly one node. When that node is unreachable over the mesh, or its VPN has had no handshake for 3 minutes, every name of the service gets SERVFAIL until someone edits the config.

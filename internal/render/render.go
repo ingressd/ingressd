@@ -92,7 +92,7 @@ type Interface struct {
 type Peer struct {
 	PublicKey  string   `json:"public_key"`
 	AllowedIPs []string `json:"allowed_ips"`
-	// Endpoint, Keepalive and PresharedKey are used by mesh and VPN peers
+	// Endpoint, Keepalive and PresharedKey are used by mesh peers
 	// (tunnel peers always dial the edge).
 	Endpoint     string `json:"endpoint,omitempty"`
 	Keepalive    int    `json:"keepalive,omitempty"`
@@ -124,7 +124,7 @@ const (
 
 // TunnelRulePriority is the policy-routing rule priority of a remapped
 // tunnel's table. It follows from the table number alone, so explicit tables
-// keep their rules stable too, below the VPN exits' range.
+// keep their rules stable too.
 func TunnelRulePriority(table int) int { return RulePriorityBase + table - TableBase }
 
 // Render produces the plan for cfg, which must already be valid.
@@ -138,7 +138,7 @@ func Render(cfg *config.Config, res Resolver, keys Keys, opts Options) (*Plan, e
 	if err != nil {
 		return nil, err
 	}
-	if err := renderSmartDNSNetwork(cfg, res, &net); err != nil {
+	if err := renderMeshNetwork(cfg, res, &net); err != nil {
 		return nil, err
 	}
 	caddy, err := renderCaddy(cfg, res, opts)

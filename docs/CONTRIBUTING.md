@@ -37,7 +37,7 @@ Several features are developed in parallel. To keep merges easy, put new logic i
 - **CLI:** new `cmd/ingressd/cmd_<feature>.go`; register it in `newRootCmd` (one line).
 - **Caddy modules:** new package under `edge/modules/<name>`, imported in `edge/cmd/ingressd-edge/main.go`, added to `scripts/check-edge-modules.sh`. Module IDs use the `ingressd_` or `edge_` prefix as in DESIGN.md.
 - **Shared runtime state for Caddy modules:** pass it in the rendered Caddy JSON (module config), not via files.
-- **Managed mode:** panel messages are handled in `internal/nodeagent/agent.go` (`dispatch`); new protocol fields go into `pkg/nodeproto` additively. Exit routing (`smartdns`) reports through the small interfaces in `internal/nodeagent/hooks.go`, registered with `nodeagent.SetSmartDNS(v)`.
+- **Managed mode:** panel messages are handled in `internal/nodeagent/agent.go` (`dispatch`); new protocol fields go into `pkg/nodeproto` additively. The node exit and mesh (`smartdns`, `mesh`) report through the small interfaces in `internal/nodeagent/hooks.go`, registered with `nodeagent.SetSmartDNS(v)`; connectors' Smart DNS state arrives in their health reports (`internal/connector/store.go`).
 - **Machine endpoints:** `/.ingressd/` (connector enrolment/poll/report/discovery, WireGuard-over-WebSocket) are served on `edge.admin.hostname` and, once a node has enrolled, on its own hostname or bare public IP (`render.Options.MachineHost`; a bare IP gets a certificate from Caddy's internal CA, which the connector join string pins).
 
 ## Conventions

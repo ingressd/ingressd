@@ -18,20 +18,11 @@ const (
 )
 
 func (m *Manager) listenRelay(addr string, isTLS bool) (io.Closer, error) {
-	ln, err := net.Listen("tcp4", addr)
+	ln, err := m.listenFn("tcp4", addr)
 	if err != nil {
 		return nil, err
 	}
 	go acceptLoop(ln, func(c net.Conn) { m.handleRelay(c, isTLS) })
-	return ln, nil
-}
-
-func (m *Manager) listenExitRelay(addr string) (io.Closer, error) {
-	ln, err := net.Listen("tcp4", addr)
-	if err != nil {
-		return nil, err
-	}
-	go acceptLoop(ln, m.handleExitRelay)
 	return ln, nil
 }
 
@@ -79,8 +70,8 @@ func peekHost(c net.Conn, isTLS bool) (string, []byte, error) {
 	}
 }
 
-// handleRelay serves one home connection to the relay (:443 or :80 on a
-// listen address): only hostnames of enabled services, only from home
+// handleRelay serves one LAN connection to the relay (:443 or :80 on the
+// listen address): only hostnames of enabled services, only from private
 // sources, only through one of the service's exits.
 func (m *Manager) handleRelay(c net.Conn, isTLS bool) {
 	defer c.Close()
@@ -96,12 +87,7 @@ func (m *Manager) handleRelay(c net.Conn, isTLS bool) {
 		return
 	}
 	st := m.state()
-	sc := st.scopeAt(netAddr(c.LocalAddr()))
-	if sc == nil {
-		m.refused.Add(1)
-		return
-	}
-	r, ok := sc.match.match(host)
+	r, ok := st.match.match(host)
 	if !ok {
 		m.refused.Add(1)
 		m.log.Info("relay refused: not a service hostname", "host", host, "client", client)
@@ -115,7 +101,7 @@ func (m *Manager) handleRelay(c net.Conn, isTLS bool) {
 	up, exit, err := m.connectUpstream(ctx, st, r, host, port)
 	cancel()
 	if err != nil {
-		m.errors.Add(1)
+		m.err.Add(1)
 		m.log.Warn("relay failed", "host", host, "service", r.Service, "exit", exit, "err", err)
 		return
 	}
@@ -133,8 +119,8 @@ func (m *Manager) handleRelay(c net.Conn, isTLS bool) {
 
 // connectUpstream resolves host and connects to it through the service's
 // active exit. When that exit turns out to be down before any client byte
-// was sent (mesh transport failure, or a refusal saying the exit is down),
-// it is marked down and the next exit is tried, at most once per exit.
+// was sent (tunnel failure, or a refusal saying the exit is down), it is
+// marked down and the next exit is tried, at most once per exit.
 func (m *Manager) connectUpstream(ctx context.Context, st *state, r route, host string, port int) (net.Conn, string, error) {
 	tried := map[string]bool{}
 	var lastErr error
@@ -169,21 +155,22 @@ func (m *Manager) openUpstream(ctx context.Context, st *state, service, exit, ho
 	if !ok {
 		return nil, false, fmt.Errorf("unknown exit %q", exit)
 	}
-	if ex.IsSelf() {
+	if ex.Egress != nil {
 		e, ok := st.egress[exit]
 		if !ok {
 			return nil, false, fmt.Errorf("exit %q not configured", exit)
 		}
-		c, _, err := m.dialOrdered(ctx, e, host, addrs, port)
+		c, _, err := dialOrdered(ctx, e, m.edges, host, addrs, port)
 		return c, errors.Is(err, errExitDown), err
 	}
-	c, err = m.remote.Connect(ctx, ex.Node, ConnectRequest{Exit: exit, Realm: ex.realm, Service: service, Host: host, Port: port, Addrs: addrs})
+	if m.remote == nil {
+		return nil, true, fmt.Errorf("%w: no tunnel to exit node %s", errExitDown, ex.Node)
+	}
+	c, err = m.remote.Connect(ctx, ex.Node, ConnectRequest{Exit: exit, Service: service, Host: host, Port: port, Addrs: addrs})
 	if err != nil {
 		var refused *relayRefused
 		if !errors.As(err, &refused) {
-			if !errors.Is(err, context.Canceled) {
-				m.remote.MarkDown(ex.Node, err)
-			}
+			m.setRemoteDown(exit, true, err.Error())
 			return nil, true, err
 		}
 		if refused.exitDown {
@@ -195,73 +182,36 @@ func (m *Manager) openUpstream(ctx context.Context, st *state, service, exit, ho
 	return c, false, nil
 }
 
-// dialOrdered connects from a self exit, trying edges best first.
-func (m *Manager) dialOrdered(ctx context.Context, e *egress, host string, addrs []netip.Addr, port int) (net.Conn, netip.Addr, error) {
+// dialOrdered connects from a local egress, trying CDN edges best first.
+func dialOrdered(ctx context.Context, e *egress, edges *edgeChecker, host string, addrs []netip.Addr, port int) (net.Conn, netip.Addr, error) {
 	if up, msg := e.up(); !up {
 		return nil, netip.Addr{}, fmt.Errorf("%w: %s", errExitDown, msg)
 	}
-	return e.dial(ctx, m.edges.order(ctx, e, host, addrs), port)
-}
-
-// handleExitRelay serves one relayed stream from a mesh peer on an exit node.
-func (m *Manager) handleExitRelay(c net.Conn) {
-	defer c.Close()
-	peer, ok := m.mesh.PeerByAddr(netAddr(c.RemoteAddr()))
-	if !ok {
-		return
-	}
-	c.SetDeadline(time.Now().Add(peekTimeout))
-	req, err := ReadConnectRequest(c)
-	if err != nil {
-		return
-	}
-	refuse := func(msg string, exitDown bool) {
-		WriteConnectResponse(c, ConnectResponse{Error: msg, ExitDown: exitDown})
-		m.log.Warn("exit relay refused", "peer", peer, "exit", req.Exit, "host", req.Host, "reason", msg)
-	}
-	e, err := m.selfExit(req.Realm, req.Exit)
-	if err != nil {
-		refuse(err.Error(), false)
-		return
-	}
-	if err := checkConnect(req); err != nil {
-		refuse(err.Error(), false)
-		return
-	}
-	ctx, cancel := context.WithTimeout(m.ctx(), dialTimeout*2+probeTimeout)
-	up, addr, err := m.dialOrdered(ctx, e, normalize(req.Host), req.Addrs, req.Port)
-	cancel()
-	if err != nil {
-		refuse(err.Error(), errors.Is(err, errExitDown))
-		return
-	}
-	defer up.Close()
-	if err := WriteConnectResponse(c, ConnectResponse{OK: true, Addr: addr.String()}); err != nil {
-		return
-	}
-	c.SetDeadline(time.Time{})
-	pipe(c, up, nil)
+	return e.dial(ctx, edges.order(ctx, e, host, addrs), port)
 }
 
 type counterAdder interface{ Add(int64) int64 }
 
-// pipe copies both ways until both directions finish, counting bytes.
+// pipe copies both ways until both directions finish. Without a counter it
+// uses io.Copy, which splices between two kernel TCP sockets.
 func pipe(a, b net.Conn, count counterAdder) {
 	done := make(chan struct{}, 2)
 	cp := func(dst, src net.Conn) {
-		buf := make([]byte, relayBuf)
-		for {
-			n, err := src.Read(buf)
-			if n > 0 {
-				if _, werr := dst.Write(buf[:n]); werr != nil {
-					break
-				}
-				if count != nil {
+		if count == nil {
+			io.Copy(dst, src)
+		} else {
+			buf := make([]byte, relayBuf)
+			for {
+				n, err := src.Read(buf)
+				if n > 0 {
+					if _, werr := dst.Write(buf[:n]); werr != nil {
+						break
+					}
 					count.Add(int64(n))
 				}
-			}
-			if err != nil {
-				break
+				if err != nil {
+					break
+				}
 			}
 		}
 		if tc, ok := dst.(interface{ CloseWrite() error }); ok {

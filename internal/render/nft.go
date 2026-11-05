@@ -36,16 +36,16 @@ func renderNFT(cfg *config.Config, extraTCP, extraUDP []int) string {
 	if cfg.Edge.FirewallManaged() {
 		tcp := append([]int{cfg.Edge.SSHPort, 80, 443}, l4InputTCP(cfg)...)
 		tcp = append(tcp, extraTCP...)
-		udp := append([]int{443}, smartDNSInputUDP(cfg)...)
+		udp := append([]int{443}, meshInputUDP(cfg)...)
 		udp = append(udp, extraUDP...)
 		for _, t := range cfg.Tunnels {
 			udp = append(udp, t.ListenPort)
 		}
 		var tunnelRules, output string
-		rules := smartDNSInputRules(cfg) + connectorInputRules(cfg) + forwardInputRules(cfg)
+		rules := meshInputRules(cfg) + exitInputRules(cfg) + connectorInputRules(cfg) + forwardInputRules(cfg)
 		if cfg.TunnelInputRestricted() {
 			tunnelRules = restrictedTunnelInput(cfg)
-			rules = smartDNSRules(cfg, false, true) + forwardInputRules(cfg)
+			rules = meshInputRules(cfg) + forwardInputRules(cfg)
 			output = restrictedOutput(cfg)
 		}
 		fmt.Fprintf(&b, `
@@ -99,13 +99,13 @@ table ip ingressd_nat {
 `, strings.Join(marks, ", "), strings.Join(nets, ", "))
 	}
 	b.WriteString(renderL4NFT(cfg))
-	b.WriteString(renderSmartDNSNFT(cfg))
+	b.WriteString(dropOldSmartDNSTables)
 	return b.String()
 }
 
 // restrictedTunnelInput (security.tunnel_input: restricted) admits from each
-// tunnel only its connector control port and its Smart DNS address, both
-// pinned to the tunnel's own interface and transit addresses, and drops
+// tunnel only its connector control port and, for sites allowed to use
+// the node exit, the exit API, both pinned to the tunnel's own interface and transit addresses, and drops
 // everything else arriving on a tunnel interface before the public ports
 // are opened: a site must not reach the proxy, SSH or the admin hostname
 // through its tunnel (another tenant's apps by Host header, with a source
@@ -118,7 +118,7 @@ func restrictedTunnelInput(cfg *config.Config) string {
 	for _, name := range sortedKeys(cfg.Tunnels) {
 		ifs = append(ifs, strconv.Quote(config.InterfaceName(name)))
 	}
-	return connectorInputRules(cfg) + smartDNSRules(cfg, true, false) +
+	return connectorInputRules(cfg) + exitInputRules(cfg) +
 		fmt.Sprintf("\t\tiifname { %s } drop\n", strings.Join(ifs, ", "))
 }
 

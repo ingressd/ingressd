@@ -541,9 +541,11 @@ func (a *Agent) dispatch(s *session, env nodeproto.Envelope) {
 	case nodeproto.TypeSmartDNSRecentRequest:
 		var req nodeproto.SmartDNSRecentRequest
 		_ = env.Decode(&req)
-		lookups := hookRecent(max(req.Limit, 0))
-		if lookups == nil {
-			lookups = []nodeproto.RecentLookup{}
+		lookups := []nodeproto.RecentLookup{}
+		if a.o.Connectors != nil && a.o.Connectors.Store != nil && req.Site != "" {
+			if l, err := a.o.Connectors.Store.SmartDNSRecent(req.Site, max(req.Limit, 0)); err == nil {
+				lookups = l
+			}
 		}
 		_ = a.sendOn(s, nodeproto.TypeSmartDNSRecent, env.ID, nodeproto.SmartDNSRecent{Lookups: lookups})
 	case nodeproto.TypeDiscoverRequest:

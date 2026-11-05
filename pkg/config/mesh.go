@@ -19,13 +19,30 @@ const (
 	MeshKeySecret = "wg-mesh-node"
 	// DefaultMeshPort is the mesh WireGuard listen port (UDP).
 	DefaultMeshPort = 51900
-	// MeshAPIPort serves the mesh HTTP API (ping, exit resolve) on the mesh
-	// address only; MeshRelayPort accepts relayed streams from peers.
-	MeshAPIPort   = 51901
-	MeshRelayPort = 51902
-	// ExitSelf in smartdns.exits.<name>.node means this node egresses.
-	ExitSelf = "self"
+	// MeshAPIPort serves the mesh HTTP API (peer probes) on the mesh
+	// address only.
+	MeshAPIPort = 51901
+	// SmartDNSExitAPIPort (HTTP: resolve, health) and SmartDNSExitRelayPort
+	// (framed relay) serve a node exit on each allowed connector tunnel's
+	// edge transit address.
+	SmartDNSExitAPIPort   = 51901
+	SmartDNSExitRelayPort = 51902
 )
+
+// Mesh connects the nodes of one org over WireGuard.
+type Mesh struct {
+	// Address is this node's mesh address with prefix, e.g. 10.255.0.1/16.
+	Address    string              `yaml:"address"`
+	ListenPort int                 `yaml:"listen_port"` // default 51900
+	Peers      map[string]MeshPeer `yaml:"peers"`       // keyed by node id
+}
+
+type MeshPeer struct {
+	PublicKey string `yaml:"public_key"`
+	Endpoint  string `yaml:"endpoint"` // host:port of the peer's mesh listener
+	Address   string `yaml:"address"`  // peer's mesh address (/32)
+	Name      string `yaml:"name"`     // human name, informational
+}
 
 // meshPeerIDRe accepts panel node ids (nod_…) and plain names.
 var meshPeerIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$`)
@@ -110,8 +127,8 @@ func (c *Config) validateMesh(v *validator) {
 	for _, id := range sortedKeys(m.Peers) {
 		peer := m.Peers[id]
 		p := "mesh.peers." + id
-		if !meshPeerIDRe.MatchString(id) || id == ExitSelf {
-			v.add(p, "peer id must match %s and not be %q", meshPeerIDRe, ExitSelf)
+		if !meshPeerIDRe.MatchString(id) {
+			v.add(p, "peer id must match %s", meshPeerIDRe)
 		}
 		if !validWGKey(peer.PublicKey) {
 			v.add(p+".public_key", "must be a base64 WireGuard public key")

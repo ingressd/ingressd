@@ -217,6 +217,9 @@ type TunnelStatus struct {
 	// site (connector sites, additive), so RTTs to all nodes can be read
 	// from any one of them.
 	ConnectorEdges []ConnectorEdge `json:"connector_edges,omitempty"`
+	// ConnectorSmartDNS is the connector's last Smart DNS report (connector
+	// sites, additive).
+	ConnectorSmartDNS *ConnectorSmartDNS `json:"connector_smartdns,omitempty"`
 }
 
 // ConnectorEdge is one edge as a connector reported it. RTTMillis is the
@@ -306,6 +309,8 @@ type SiteUsage struct {
 }
 
 type ServiceUsage struct {
+	// Site is the connector site whose relay carried the bytes.
+	Site    string `json:"site,omitempty"`
 	Service string `json:"service"`
 	Bytes   int64  `json:"bytes"`
 	Conns   int64  `json:"connections"`
@@ -490,7 +495,9 @@ type SiteConfig struct {
 }
 
 type SmartDNSRecentRequest struct {
-	Limit int `json:"limit,omitempty"`
+	// Site is the connector site whose lookups are wanted.
+	Site  string `json:"site,omitempty"`
+	Limit int    `json:"limit,omitempty"`
 }
 
 type SmartDNSRecent struct {

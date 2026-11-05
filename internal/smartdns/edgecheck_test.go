@@ -94,7 +94,7 @@ func TestProbeEdge(t *testing.T) {
 	probePort = port
 	defer func() { probePort = origPort }()
 
-	got := probeEdge(context.Background(), &egress{exit: "nl"}, netip.MustParseAddr("127.0.0.1"), ck)
+	got := probeEdge(context.Background(), newEgress(EgressOptions{Name: "nl"}), netip.MustParseAddr("127.0.0.1"), ck)
 	if got != "NL" {
 		t.Fatalf("probe = %q", got)
 	}
@@ -103,7 +103,7 @@ func TestProbeEdge(t *testing.T) {
 	}
 	// TLS failures count as unknown.
 	probeTLSConfig = func(host string) *tls.Config { return &tls.Config{ServerName: host} }
-	if got := probeEdge(context.Background(), &egress{exit: "nl"}, netip.MustParseAddr("127.0.0.1"), ck); got != "" {
+	if got := probeEdge(context.Background(), newEgress(EgressOptions{Name: "nl"}), netip.MustParseAddr("127.0.0.1"), ck); got != "" {
 		t.Errorf("untrusted edge = %q", got)
 	}
 }
