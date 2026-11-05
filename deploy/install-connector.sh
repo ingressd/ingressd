@@ -196,10 +196,10 @@ verify_sig() {
 		minisign -Vq -P "$RELEASE_KEY" -m "$1" -x "$2" || die "SHA256SUMS signature verification failed"
 		say "SHA256SUMS signature verified (minisign)"
 	elif [ -x "$EXE" ] && "$EXE" verify-sums --help >/dev/null 2>&1; then
-		"$EXE" verify-sums "$1" "$2" >/dev/null || die "SHA256SUMS signature verification failed"
+		INGRESSD_RELEASE_PUBLIC_KEY="$RELEASE_KEY" "$EXE" verify-sums "$1" "$2" >/dev/null || die "SHA256SUMS signature verification failed"
 		say "SHA256SUMS signature verified (installed ingressd-connector)"
 	else
-		"$3" verify-sums "$1" "$2" >/dev/null || die "SHA256SUMS signature verification failed"
+		INGRESSD_RELEASE_PUBLIC_KEY="$RELEASE_KEY" "$3" verify-sums "$1" "$2" >/dev/null || die "SHA256SUMS signature verification failed"
 		say "SHA256SUMS signature verified by the downloaded binary (install minisign for an independent check)"
 	fi
 }
