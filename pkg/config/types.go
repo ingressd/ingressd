@@ -142,8 +142,8 @@ type TunnelSibling struct {
 	WSURL string `yaml:"ws_url"`
 	// Priority (lower first, default 0) and PoP are passed to connectors,
 	// which prefer edges by priority, then RTT.
-	Priority int    `yaml:"priority"`
-	PoP      string `yaml:"pop"`
+	Priority int    `yaml:"priority,omitempty"`
+	PoP      string `yaml:"pop,omitempty"`
 }
 
 // DefaultSiteDNS is written to site configs when site_dns is unset.
