@@ -1,6 +1,6 @@
 # Smart DNS on the connector
 
-Status: design draft (2026-11-05), nothing built. Replaces the edge-side Smart DNS of [ARCHITECTURE.md §7](ARCHITECTURE.md#7-exit-routing-smartdns-in-rev1) and §11 (per-realm Smart DNS), and moves the home side of [EXIT-FAILOVER.md](EXIT-FAILOVER.md) into the connector. The product has not launched, so the edge-side home resolver and relay are removed rather than kept for compatibility.
+Status: node and connector implemented (2026-11-05); panel in progress; exit attachments (§5.3) and the netns suite (§7) not built yet. Replaces the edge-side Smart DNS of [ARCHITECTURE.md §7](ARCHITECTURE.md#7-exit-routing-smartdns-in-rev1) and §11 (per-realm Smart DNS), and moves the home side of [EXIT-FAILOVER.md](EXIT-FAILOVER.md) into the connector. The product has not launched, so the edge-side home resolver and relay are removed rather than kept for compatibility.
 
 ---
 
@@ -52,13 +52,13 @@ A new connector component (`internal/connector/client/smartdns`, built on the sh
 - **Relay**: reads SNI (443) or Host (80), matches the service and connects through the service's active exit. Flows stick to the exit they started on; a connection is retried on the next exit only before any client byte was sent (as today). Only private sources are served (`allowedClient`).
 - **Exits**: a connector exit is a wireguard-go device on a gVisor netstack, separate from the edge link, one per VPN config. No root, no interface, no routing table on the host, so it works the same on Linux, Windows, macOS and Docker, and can never capture host traffic. DNS for service names is resolved inside the VPN (the file's `DNS =` servers, else `upstream` through the tunnel), dials go through the netstack. Endpoint re-resolution every 30 s, keepalive 25 s and MTU follow §7.1 of ARCHITECTURE.md.
 - **Health**: a connector exit is up when its handshake is fresher than 3 minutes **and** an active probe (TCP connect through the tunnel to the trace host, every 20 s; 3 failures = down) succeeds, so a silently dead provider is seen within a minute instead of three. Country comes from the trace fetched through the exit every 10 minutes and from edge location checks, as today.
-- **Edge location checks** (`checks` from the catalog) run on the connector through each exit.
+- **Edge location checks** (`checks` from the catalog) run on the connector through its VPN exits, and on the node for its node exit (the panel puts them in both configs).
 
 ### 3.2 Edge node: exit only
 
 A self-hosted node keeps only one role: letting its own connector sites leave from its public IP for chosen services. The node is the customer's server and its IP the customer's choice; nothing on the node changes the host's routing.
 
-- `smartdns.exit` on the node: `{ enabled: true, country: NL, sites: [<tunnel>, …] }`. One exit per node (it has one egress: its default route). `sites` lists the connector tunnels allowed to use it; the panel fills it with the org's connector sites attached to that node. `country` is what the user expects; the node checks it (below).
+- `smartdns.exit` on the node: `{ country: NL, sites: [<tunnel>, …], upstream?, checks? }` (present = enabled). One exit per node (it has one egress: its default route). `sites` lists the connector tunnels allowed to use it; the panel fills it with the org's connector sites attached to that node. `country` is what the user expects; the node checks it (below).
 - **Egress**: ordinary sockets of the node's default route, as the unprivileged `ingressd` user, connecting only to public unicast addresses (`checkConnect` / `publicUnicast` as today: never the LAN, the mesh, metadata or other tunnels). Names are resolved by the node's `upstream` resolvers (default 1.1.1.1, 9.9.9.9) from the node's location.
 - **Tunnel exit API** on the tunnel's edge transit address, replacing the mesh exit API:
   - `POST :51901/v1/resolve {name}` → answers resolved at the node's location, `exit_up`.
@@ -97,9 +97,9 @@ A typical failover pair is one VPN exit on the connector and the user's own VPS 
 
 The site's Smart DNS config travels with the connector's tunnel config but is opaque to the edge:
 
-- `TunnelConfig.SmartDNS *SignedBlob` (additive, covered by `Revision`). The blob is the JSON config below, signed by the org key (`nodeproto` v2 signing, bound to org and site). The node gets it in its snapshot (`tunnels.<t>.smartdns_blob`; managed nodes get it in the PoP bundle) and hands it out unchanged.
-- The connector pins the org public key at enrolment (join strings gain `o`, the org public key; connectors enrolled without one accept no Smart DNS config).
-- VPN configs are encrypted in the browser to the **connector's** age recipient. The connector generates an age identity at enrolment (stored with its state, never sent) and reports the recipient in `EnrollRequest.AgeRecipient` and `Health.AgeRecipient`. Edges never hold a key that opens it.
+- `TunnelConfig.SmartDNS` (raw `nodeproto.SignedSmartDNS`) (additive, covered by `Revision`). The blob is the JSON config below, signed by the org key (`nodeproto.SignSmartDNS`) and bound to the connector's WireGuard public key (`connector`), which is the same on every edge whatever each node names the tunnel (managed nodes rename tunnels into the tenant's realm). The node gets it in its snapshot (`tunnels.<t>.smartdns`; managed nodes get it in the PoP bundle) and hands it out unchanged.
+- The connector pins the org public key at enrolment (join strings gain `o`). A connector enrolled without one pins the key of the first valid config (trust on first use, logged as a warning).
+- VPN configs are encrypted in the browser to the **connector's** age recipient. The connector generates an age identity at enrolment (stored with its state, never sent) and reports the recipient in its health reports (`smartdns.age_recipient`); it is generated on first start, so connectors enrolled earlier get one too. Edges never hold a key that opens it.
 
 ```json
 {
@@ -127,7 +127,7 @@ Additive fields in `Health` (sent to every edge as today, so any node of the sit
 - `smartdns.services`: `ServiceStatus` (active exit, failover since).
 - `smartdns.usage`: `ServiceUsage` deltas (connections, bytes), taken on each report.
 
-Recent lookups follow the discovery pattern: a poll response carries `SmartDNSRecentID`, the connector posts the ring buffer to `POST /.ingressd/connector/smartdns-recent`, and the node answers the panel's `smartdns_recent_request` with it. The node agent forwards all of it in `status` keyed by tunnel; the panel stores it per site.
+Each health report carries the newest 100 lookups (`smartdns.recent`); the node keeps the last report per connector and answers the panel's `smartdns_recent_request {site}` from it, and leaves them out of `status`. Usage deltas (`smartdns_usage`) are taken once per report and kept for the next one when the report fails, so each delta reaches one edge; the node adds them to `usage` with `site` set.
 
 ### 5.3 Exit attachments (panel)
 
@@ -156,7 +156,7 @@ Removed:
 Connector:
 
 - `internal/connector/client/smartdns`: listeners, connector exits (wireguard-go + netstack), tunnel exit client, health and usage reporting.
-- `proto`: `TunnelConfig.SmartDNS`, `Health.SmartDNS`, `AgeRecipient`, `SmartDNSRecentID`, join `o`.
+- `proto`: `TunnelConfig.SmartDNS`, `TunnelConfig.Node` (the edge's node id), `Health.SmartDNS`, `Health.SmartDNSUsage`, join `o`.
 - `ingressd-connector smartdns status` (local status, like `ingressd smartdns status` today).
 
 ### 6.2 Panel (`ingressd-panel`, private)
