@@ -120,7 +120,7 @@ func TestMatcher(t *testing.T) {
 		r, ok := m.match(name)
 		got := ""
 		if ok {
-			got = r.Service + "/" + r.Exit
+			got = r.Service + "/" + strings.Join(r.Exits, ",")
 		}
 		if got != want {
 			t.Errorf("match(%q) = %q, want %q", name, got, want)

@@ -109,8 +109,14 @@ type Manager struct {
 	usage    map[string]*svcCounter
 	reported map[string][2]int64
 
-	downMu     sync.Mutex
-	remoteDown map[string]time.Time // exit name -> when its node said it is down
+	downMu            sync.Mutex
+	remoteDown        map[string]downMark // exit name -> when (and why) its node said it is down
+	healthUnsupported map[string]bool     // exit nodes answering 404 on GET /v1/exits
+
+	activeMu sync.Mutex
+	active   map[string]*activeExit // service -> exit in use
+
+	now func() time.Time
 
 	refused, errors atomic.Int64
 }
@@ -135,23 +141,26 @@ func New(o Options) *Manager {
 		}
 	}
 	m := &Manager{
-		log:         o.Log.With("component", "smartdns"),
-		statusPath:  o.StatusPath,
-		device:      o.Device,
-		configure:   o.Configure,
-		resolveHost: o.Lookup,
-		traceURL:    o.TraceURL,
-		probes:      map[string]*probeState{},
-		mesh:        mesh.New(o.Log.With("component", "mesh")),
-		edges:       newEdgeChecker(),
-		cache:       newCache(),
-		recent:      newRing(recentSize),
-		usage:       map[string]*svcCounter{},
-		reported:    map[string][2]int64{},
-		remoteDown:  map[string]time.Time{},
-		dnsPort:     53,
-		tlsPort:     config.SmartDNSRelayTLSPort,
-		httpPort:    config.SmartDNSRelayHTTPPort,
+		log:               o.Log.With("component", "smartdns"),
+		statusPath:        o.StatusPath,
+		device:            o.Device,
+		configure:         o.Configure,
+		resolveHost:       o.Lookup,
+		traceURL:          o.TraceURL,
+		probes:            map[string]*probeState{},
+		mesh:              mesh.New(o.Log.With("component", "mesh")),
+		edges:             newEdgeChecker(),
+		cache:             newCache(),
+		recent:            newRing(recentSize),
+		usage:             map[string]*svcCounter{},
+		reported:          map[string][2]int64{},
+		remoteDown:        map[string]downMark{},
+		healthUnsupported: map[string]bool{},
+		active:            map[string]*activeExit{},
+		now:               time.Now,
+		dnsPort:           53,
+		tlsPort:           config.SmartDNSRelayTLSPort,
+		httpPort:          config.SmartDNSRelayHTTPPort,
 	}
 	m.mesh.Device = o.Device
 	m.remote = meshExitClient{m.mesh}
@@ -159,6 +168,7 @@ func New(o Options) *Manager {
 	m.baseCtx.Store(ctxBox{context.Background()})
 	m.st.Store(&state{match: matcher{}, egress: map[string]*egress{}, site: map[netip.Addr]string{}})
 	m.mesh.Handle("POST /v1/resolve", m.resolveHandler())
+	m.mesh.Handle("GET /v1/exits", m.exitsHandler())
 	return m
 }
 
@@ -177,6 +187,7 @@ func (m *Manager) state() *state { return m.st.Load() }
 func (m *Manager) Run(ctx context.Context) {
 	m.baseCtx.Store(ctxBox{ctx})
 	go m.mesh.Run(ctx)
+	go m.runHealthPoll(ctx)
 	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
 	for n := 0; ; n++ {
@@ -190,6 +201,7 @@ func (m *Manager) Run(ctx context.Context) {
 			m.listeners.retry()
 		}
 		m.watchEgress(time.Now())
+		m.refreshActive(m.state())
 		m.writeStatus()
 	}
 }
@@ -250,6 +262,7 @@ func (m *Manager) Reconfigure(cfg *config.Config, res func(string) (string, erro
 		m.cache.clear()
 	}
 	m.st.Store(st)
+	m.pruneActive(st.match)
 	m.edges.setChecks(cfg.SmartDNS)
 	m.mesh.Reconfigure(cfg)
 
@@ -308,6 +321,7 @@ var _ interface {
 	TakeServiceUsage() []nodeproto.ServiceUsage
 	RecentLookups(limit int) []nodeproto.RecentLookup
 	Capabilities() []string
+	Services() []nodeproto.ServiceStatus
 } = (*Manager)(nil)
 
 // Capabilities are announced in hello.
@@ -381,23 +395,24 @@ type RemoteExit struct {
 
 // Status is the snapshot written to the status file.
 type Status struct {
-	Updated     time.Time                `json:"updated"`
-	Listen      []string                 `json:"listen"`
-	Exits       []nodeproto.ExitStatus   `json:"exits"`
-	RemoteExits []RemoteExit             `json:"remote_exits"`
-	Mesh        []nodeproto.MeshPeer     `json:"mesh"`
-	Usage       []nodeproto.ServiceUsage `json:"usage"` // cumulative since start
-	Edges       []EdgeResult             `json:"edges"`
-	Refused     int64                    `json:"relay_refused"`
-	Errors      int64                    `json:"relay_errors"`
-	Recent      []Lookup                 `json:"recent"`
+	Updated     time.Time                 `json:"updated"`
+	Listen      []string                  `json:"listen"`
+	Exits       []nodeproto.ExitStatus    `json:"exits"`
+	RemoteExits []RemoteExit              `json:"remote_exits"`
+	Services    []nodeproto.ServiceStatus `json:"services"`
+	Mesh        []nodeproto.MeshPeer      `json:"mesh"`
+	Usage       []nodeproto.ServiceUsage  `json:"usage"` // cumulative since start
+	Edges       []EdgeResult              `json:"edges"`
+	Refused     int64                     `json:"relay_refused"`
+	Errors      int64                     `json:"relay_errors"`
+	Recent      []Lookup                  `json:"recent"`
 }
 
 // Snapshot returns the current status.
 func (m *Manager) Snapshot() Status {
 	st := m.state()
 	s := Status{
-		Updated: time.Now().UTC(), Listen: []string{}, Exits: m.Exits(), RemoteExits: []RemoteExit{},
+		Updated: time.Now().UTC(), Listen: []string{}, Exits: m.Exits(), RemoteExits: []RemoteExit{}, Services: m.Services(),
 		Mesh: m.MeshPeers(), Usage: m.usageTotals(), Edges: m.EdgeResults(),
 		Refused: m.refused.Load(), Errors: m.errors.Load(), Recent: m.recent.list(100),
 	}

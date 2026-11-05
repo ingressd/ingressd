@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -24,6 +25,9 @@ import (
 //	→ {"exit_up":true,"rcode":0,"addrs":["18.239.36.1"],"ttl":60}
 //	→ {"exit_up":false,"error":"VPN tunnel ix-x-nl has no recent handshake"}
 //	→ {"exit_up":true,"error":"10.2.0.1:53: i/o timeout"}   (resolution failed)
+//
+//	GET /v1/exits   (health of the exits the node hosts; 404 on older nodes)
+//	→ {"exits":{"gb-lon":{"up":true},"gb-ams":{"up":false,"error":"no recent handshake"}}}
 
 type resolveRequest struct {
 	Exit string `json:"exit"`
@@ -38,6 +42,19 @@ type resolveResponse struct {
 	Error  string       `json:"error,omitempty"`
 }
 
+type exitState struct {
+	Up    bool   `json:"up"`
+	Error string `json:"error,omitempty"`
+}
+
+type exitsResponse struct {
+	Exits map[string]exitState `json:"exits"`
+}
+
+// errHealthUnsupported: the exit node predates GET /v1/exits; its exits are
+// then judged by the mesh probe and resolve answers only.
+var errHealthUnsupported = errors.New("exit node does not report exit health")
+
 // errExitDown means the exit cannot egress: its node is unreachable over the
 // mesh or its VPN is down. Service names then fail closed (SERVFAIL).
 var errExitDown = errors.New("exit is down")
@@ -49,6 +66,9 @@ type exitClient interface {
 	Resolve(ctx context.Context, node, exit, name string) (resolveResponse, error)
 	// Connect opens a relayed stream through node.
 	Connect(ctx context.Context, node string, req ConnectRequest) (net.Conn, error)
+	// Health returns the state of the exits node hosts, or
+	// errHealthUnsupported.
+	Health(ctx context.Context, node string) (map[string]exitState, error)
 	Up(node string) bool
 	MarkDown(node string, err error)
 }
@@ -84,6 +104,34 @@ func (c meshExitClient) Resolve(ctx context.Context, node, exit, name string) (r
 	return out, nil
 }
 
+func (c meshExitClient) Health(ctx context.Context, node string) (map[string]exitState, error) {
+	u, err := c.m.URL(node, "/v1/exits")
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.m.Client().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusNotFound, http.StatusMethodNotAllowed:
+		return nil, errHealthUnsupported
+	default:
+		return nil, fmt.Errorf("exit node answered HTTP %d", resp.StatusCode)
+	}
+	var out exitsResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&out); err != nil {
+		return nil, fmt.Errorf("exit node: %w", err)
+	}
+	return out.Exits, nil
+}
+
 func (c meshExitClient) Connect(ctx context.Context, node string, req ConnectRequest) (net.Conn, error) {
 	conn, err := c.m.DialPeer(ctx, node, config.MeshRelayPort)
 	if err != nil {
@@ -101,14 +149,17 @@ func (c meshExitClient) Connect(ctx context.Context, node string, req ConnectReq
 	}
 	if !resp.OK {
 		conn.Close()
-		return nil, &relayRefused{resp.Error}
+		return nil, &relayRefused{msg: resp.Error, exitDown: resp.ExitDown}
 	}
 	conn.SetDeadline(time.Time{})
 	return conn, nil
 }
 
 // relayRefused is an exit's refusal (as opposed to a transport failure).
-type relayRefused struct{ msg string }
+type relayRefused struct {
+	msg      string
+	exitDown bool
+}
 
 func (e *relayRefused) Error() string { return "exit refused: " + e.msg }
 
@@ -123,6 +174,19 @@ func (m *Manager) resolveHandler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		resp := m.resolveLocal(r.Context(), req.Exit, normalize(req.Name))
 		json.NewEncoder(w).Encode(resp)
+	})
+}
+
+// exitsHandler serves GET /v1/exits on exit nodes.
+func (m *Manager) exitsHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		out := exitsResponse{Exits: map[string]exitState{}}
+		for name, e := range m.state().egress {
+			up, msg := e.up()
+			out.Exits[name] = exitState{Up: up, Error: msg}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(out)
 	})
 }
 
