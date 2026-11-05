@@ -23,6 +23,12 @@ type ExitReporter interface {
 	Exits() []nodeproto.ExitStatus
 }
 
+// ServiceReporter reports the Smart DNS services and the exit each uses
+// (status.smartdns_services).
+type ServiceReporter interface {
+	Services() []nodeproto.ServiceStatus
+}
+
 // MeshReporter reports the node mesh peers (status.mesh).
 type MeshReporter interface {
 	MeshPeers() []nodeproto.MeshPeer
@@ -52,7 +58,7 @@ var (
 )
 
 // SetSmartDNS registers the Smart DNS implementation (nil unregisters). It
-// may implement any subset of ExitReporter, MeshReporter,
+// may implement any subset of ExitReporter, ServiceReporter, MeshReporter,
 // ServiceUsageReporter, RecentLookupReporter and Capability.
 func SetSmartDNS(v any) {
 	hooksMu.Lock()
@@ -69,6 +75,13 @@ func hook() any {
 func hookExits() []nodeproto.ExitStatus {
 	if h, ok := hook().(ExitReporter); ok {
 		return h.Exits()
+	}
+	return nil
+}
+
+func hookServices() []nodeproto.ServiceStatus {
+	if h, ok := hook().(ServiceReporter); ok {
+		return h.Services()
 	}
 	return nil
 }

@@ -92,6 +92,7 @@ func (a *Agent) buildStatus(ctx context.Context) nodeproto.Status {
 		checks = append(checks, a.o.ExtraChecks(ctx)...)
 	}
 	st.Exits = hookExits()
+	st.SmartDNSServices = hookServices()
 	st.Mesh = hookMesh()
 	st.Checks = checks
 	st.Health = health(checks)

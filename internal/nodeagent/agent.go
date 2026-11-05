@@ -393,7 +393,7 @@ func (a *Agent) hello() nodeproto.Hello {
 		PublicIPv4: st.PublicIPv4, PublicIPv6: st.PublicIPv6,
 		AppliedRevision: st.AppliedRevision, UsageSeq: a.usage.seq(),
 		Hostname: st.Hostname, SSHPort: st.SSHPort,
-		Capabilities: append(append([]string{"live", "diag", "discovery", "usage_ack", nodeproto.CapabilityUpgrade, nodeproto.CapabilityAccessIdentity, nodeproto.CapabilityAccessPasskey, nodeproto.CapabilitySmartDNSChecks}, trustCapabilities...), hookCapabilities()...),
+		Capabilities: append(append([]string{"live", "diag", "discovery", "usage_ack", nodeproto.CapabilityUpgrade, nodeproto.CapabilityAccessIdentity, nodeproto.CapabilityAccessPasskey, nodeproto.CapabilitySmartDNSChecks, nodeproto.CapabilitySmartDNSFailover}, trustCapabilities...), hookCapabilities()...),
 		Install:      a.o.Upgrade.Install, OS: runtime.GOOS, Arch: runtime.GOARCH,
 	}
 	if id, err := secrets.LoadIdentity(a.o.KeyPath); err == nil {
