@@ -154,6 +154,12 @@ func DiagnoseOrigin(ctx context.Context, cfg *config.Config, appName string, tim
 	conn, err := d.DialContext(ctx, "tcp", dial)
 	if err != nil {
 		code, msg := classifyDialError(err)
+		// Through a connector it is the connector's machine that dials the
+		// service, so a timeout is never the router's VPN firewall zone.
+		var ne net.Error
+		if t, ok := cfg.Tunnels[tun]; ok && t.Site == config.SiteConnector && (errors.As(err, &ne) && ne.Timeout() || errors.Is(err, context.DeadlineExceeded)) {
+			msg = "no reply to the connection attempt: the tunnel is up, so the connector's machine could not reach the service (check the address and port, that the service listens on the LAN and not only on localhost, and any firewall between the connector's machine and the service)"
+		}
 		s.end("connect", false, "%s: %v", dial, err)
 		return s.result(code, "%s", msg)
 	}

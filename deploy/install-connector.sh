@@ -312,6 +312,18 @@ if [ "$NO_SERVICE" -eq 1 ]; then
 fi
 if [ "$ROOT" -eq 1 ] && { [ "$SYSTEMD" -eq 1 ] || [ "$OS" = darwin ]; }; then
 	"$EXE" "$@" install-service
+	# A non-default release key (a staging or self-signed panel) must reach the
+	# service too, or self-updates are checked against the built-in key. The
+	# literal is split so a panel rewriting the key here leaves it alone.
+	if [ "$SYSTEMD" -eq 1 ]; then
+		if [ "$RELEASE_KEY" != "RWTCi6nxdL6unHcK5KWP/DTr/NFJSt1EEN48""LJTlNVJHGkPs9/Ax00gl" ]; then
+			mkdir -p /etc/systemd/system/ingressd-connector.service.d
+			printf '[Service]\nEnvironment=INGRESSD_RELEASE_PUBLIC_KEY=%s\n' "$RELEASE_KEY" >/etc/systemd/system/ingressd-connector.service.d/release-key.conf
+		else
+			rm -f /etc/systemd/system/ingressd-connector.service.d/release-key.conf
+		fi
+		systemctl daemon-reload
+	fi
 	if [ "$UPGRADE" -eq 1 ] || [ "$ENROLLED" -eq 1 ]; then
 		if [ "$SYSTEMD" -eq 1 ]; then
 			systemctl restart ingressd-connector
