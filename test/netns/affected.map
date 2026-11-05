@@ -61,6 +61,7 @@ test/netns/managed-node-e2e.sh           managed-node
 test/netns/smartdns-e2e.sh               smartdns
 test/netns/remote-updates-e2e.sh         remote-updates
 test/netns/smartdns-vpn-exits-e2e.sh     smartdns-vpn-exits
+test/netns/realms-e2e.sh                 realms
 
 # --- Test helpers ---------------------------------------------------------------
 test/netns/sdtool/*               smartdns smartdns-vpn-exits
