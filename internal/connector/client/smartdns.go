@@ -154,14 +154,16 @@ func (c *sdController) dialTunnel(ctx context.Context, network, addr string) (ne
 	return s.link.DialTunnel(ctx, addr)
 }
 
-// candidate is one edge's signed config.
+// candidate is a signed config: an edge's copy, or the one last accepted.
 type candidate struct {
 	env nodeproto.SignedSmartDNS
-	raw string
+	raw json.RawMessage
 }
 
-// update applies the newest valid config any edge carries; with none,
-// Smart DNS stops.
+// update applies the newest valid config among the edges' copies and the
+// last accepted one, which is kept in the state file: Smart DNS must keep
+// running with every edge down or stale, so losing an edge never stops it.
+// Only a signed config without exits turns it off.
 func (c *sdController) update() {
 	s := c.session()
 	if s == nil {
@@ -169,79 +171,70 @@ func (c *sdController) update() {
 	}
 	st := s.stateCopy()
 	connector := s.priv.PublicKey().String()
-	var best *candidate
+	var cands []candidate
 	var refused []string
-	for _, es := range st.Edges {
-		raw := es.Config.SmartDNS
+	add := func(raw json.RawMessage) {
 		if len(raw) == 0 {
-			continue
+			return
 		}
 		var env nodeproto.SignedSmartDNS
 		if err := json.Unmarshal(raw, &env); err != nil {
 			refused = append(refused, "unreadable config: "+err.Error())
-			continue
+			return
 		}
 		if err := env.Verify(connector); err != nil {
 			refused = append(refused, err.Error())
-			continue
+			return
 		}
 		if st.OrgKey != "" && env.Key != st.OrgKey {
 			refused = append(refused, "config signed by another org key than the pinned one")
-			continue
+			return
 		}
-		if best == nil || env.Issued.After(best.env.Issued) {
-			best = &candidate{env: env, raw: string(raw)}
-		}
+		cands = append(cands, candidate{env: env, raw: raw})
 	}
+	add(st.SmartDNSConfig)
+	for _, es := range st.Edges {
+		add(es.Config.SmartDNS)
+	}
+	slices.SortStableFunc(cands, func(a, b candidate) int { return b.env.Issued.Compare(a.env.Issued) })
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if best == nil && len(refused) > 0 {
-		// A config that does not verify never replaces or stops the one in
-		// effect: otherwise an edge could turn Smart DNS off.
-		c.errMsg = strings.Join(refused, "; ")
-		return
-	}
-	if best == nil {
-		if c.applied != "" {
-			c.log.Info("smart DNS turned off (no edge carries a config)")
+	for _, cand := range cands {
+		if cand.env.Signature == c.applied {
+			break
 		}
-		c.stopLocked()
-		c.applied, c.listen = "", ""
-		c.errMsg = strings.Join(refused, "; ")
-		return
+		// An edge that was down holds an old copy: that is no error.
+		if cand.env.Issued.Before(st.SmartDNSIssued) {
+			continue
+		}
+		plan, listen, err := c.planLocked(st, cand.env)
+		if err != nil {
+			refused = append(refused, err.Error())
+			c.log.Warn("smart DNS config not applied", "err", err)
+			continue
+		}
+		c.mgr.Reconfigure(plan)
+		c.applied, c.issued, c.listen = cand.env.Signature, cand.env.Issued, listen
+		c.log.Info("smart DNS config applied", "issued", cand.env.Issued, "listen", listen, "services", len(plan.Services), "exits", len(plan.Exits))
+		c.remember(s, cand)
+		break
 	}
-	if best.env.Signature == c.applied {
-		c.errMsg = strings.Join(refused, "; ")
-		return
-	}
-	if best.env.Issued.Before(st.SmartDNSIssued) {
-		c.errMsg = fmt.Sprintf("refused a config issued %s, older than the one in effect", best.env.Issued.UTC().Format(time.RFC3339))
-		return
-	}
-	plan, listen, err := c.planLocked(st, best.env)
-	if err != nil {
-		c.errMsg = err.Error()
-		c.log.Warn("smart DNS config not applied", "err", err)
-		return
-	}
-	c.mgr.Reconfigure(plan)
-	c.applied, c.issued, c.listen, c.errMsg = best.env.Signature, best.env.Issued, listen, ""
-	c.log.Info("smart DNS config applied", "issued", best.env.Issued, "listen", listen, "services", len(plan.Services), "exits", len(plan.Exits))
+	c.errMsg = strings.Join(refused, "; ")
+}
+
+// remember persists an applied config and pins its org key on first use.
+func (c *sdController) remember(s *session, cand candidate) {
 	s.mu.Lock()
-	changed := false
+	defer s.mu.Unlock()
 	if s.st.OrgKey == "" {
-		s.st.OrgKey, changed = best.env.Key, true
+		s.st.OrgKey = cand.env.Key
 		c.log.Warn("pinned the org key from the first smart DNS config (the join string carried none)")
 	}
-	if best.env.Issued.After(s.st.SmartDNSIssued) {
-		s.st.SmartDNSIssued, changed = best.env.Issued, true
+	s.st.SmartDNSIssued, s.st.SmartDNSConfig = cand.env.Issued, cand.raw
+	if err := s.st.Save(s.r.StatePath); err != nil {
+		c.log.Warn("save state", "err", err)
 	}
-	if changed {
-		if err := s.st.Save(s.r.StatePath); err != nil {
-			c.log.Warn("save state", "err", err)
-		}
-	}
-	s.mu.Unlock()
 }
 
 // planLocked turns a verified config into the engine's plan, starting and
@@ -255,6 +248,14 @@ func (c *sdController) planLocked(st *State, env nodeproto.SignedSmartDNS) (smar
 	site.Normalize()
 	if err := site.Validate(); err != nil {
 		return smartdns.Plan{}, "", fmt.Errorf("smart DNS config: %w", err)
+	}
+	if len(site.Exits) == 0 {
+		for name, v := range c.vpns {
+			v.close()
+			delete(c.vpns, name)
+		}
+		c.log.Info("smart DNS turned off (the config has no exits)")
+		return smartdns.Plan{Site: st.Tunnel()}, "", nil
 	}
 	listen := site.ListenAddr()
 	if !listen.IsValid() {
@@ -340,16 +341,6 @@ func (c *sdController) decrypt(ciphertext string) (string, error) {
 		return "", err
 	}
 	return string(b), nil
-}
-
-func (c *sdController) stopLocked() {
-	if c.applied != "" {
-		c.mgr.Reconfigure(smartdns.Plan{})
-	}
-	for name, v := range c.vpns {
-		v.close()
-		delete(c.vpns, name)
-	}
 }
 
 // report is the connector's Smart DNS state for its health reports.

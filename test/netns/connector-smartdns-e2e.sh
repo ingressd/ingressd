@@ -141,9 +141,13 @@ conn() { in_site "$BIN/ingressd-connector" --state "$STATE" "$@"; }
 sdstatus() { conn smartdns status 2>&1 | tr -s " 	" " "; }
 JOIN=$(he tunnel enroll-token cloud --join --ca "$ROOT_CA" 2>/dev/null)
 expect "connector enrolls" "Enrolled tunnel \"cloud\"" conn enroll "$JOIN" --edge-addr 172.16.1.1 --mode tun
-ip netns exec "$SITE" env INGRESSD_SMARTDNS_TRACE_URL=$TRACE INGRESSD_SMARTDNS_PROBE_ADDR=192.0.2.10:443 \
-	"$BIN/ingressd-connector" --state "$STATE" run --udp-timeout 5s >"$TMP/conn.log" 2>&1 &
-PIDS+=($!)
+start_conn() {
+	ip netns exec "$SITE" env INGRESSD_SMARTDNS_TRACE_URL=$TRACE INGRESSD_SMARTDNS_PROBE_ADDR=192.0.2.10:443 \
+		"$BIN/ingressd-connector" --state "$STATE" run --udp-timeout 5s >>"$TMP/conn.log" 2>&1 &
+	CONN_PID=$!
+	PIDS+=("$CONN_PID")
+}
+start_conn
 wait_for "connector up over UDP" "Transport: udp" 20 bash -c "ip netns exec $SITE $BIN/ingressd-connector --state $STATE status | tr -s ' '"
 wait_for "connector created its age key" "age_identity" 20 cat "$STATE"
 wait_for "edge learns the connector's age recipient" "age1" 60 cat "$TMP/state/connector.json"
@@ -204,10 +208,12 @@ expect "the config in effect stays" "edge=192.0.2.20 src=198.51.100.1" \
 	"${CURL[@]}" --resolve tv.stream.example:443:192.168.0.1 https://tv.stream.example/
 write_conf "$(signed "$OTHER_SEED" $T2 '["nl-node", "nl-vpn"]')" yes
 wait_for "config from another org key refused" "another org key" 60 cat "$TMP/state/connector.json"
-write_conf "$(signed "$SEED" $T0 '["nl-node", "nl-vpn"]')" yes
-wait_for "replayed older config refused" "older than the one in effect" 60 cat "$TMP/state/connector.json"
+write_conf "$(signed "$SEED" $T0 '["nl-vpn"]')" yes
+sleep 3
+expect "a replayed older config changes nothing" "edge=192.0.2.20 src=198.51.100.1" \
+	"${CURL[@]}" --resolve tv.stream.example:443:192.168.0.1 https://tv.stream.example/
 write_conf "$BLOB1" yes
-wait_for "the current config clears the error" "cleared" 60 bash -c "grep -q 'older than the one in effect' $TMP/state/connector.json || echo cleared"
+wait_for "the current config clears the error" "cleared" 60 bash -c "grep -q 'another org key' $TMP/state/connector.json || echo cleared"
 
 # --- failover: the node exit goes away, the connector's VPN takes over ---
 write_conf "$BLOB1" no
@@ -217,6 +223,17 @@ wait_for "streams fail over to the connector's VPN" "edge=192.0.2.30 src=198.51.
 wait_for "the service reports the failover" "tv nl-node,nl-vpn nl-vpn" 20 sdstatus
 expect "the VPN resolved the name at its location" "198.51.100.14 tv.stream.example." cat "$TMP/cdn-dns.log"
 
+# --- the VPN depends on no edge, not even across a connector restart ---
+ip -n "$EDGE" link set wan0 down
+kill "$CONN_PID"
+wait "$CONN_PID" 2>/dev/null || true
+start_conn
+wait_for "the connector runs its last config with the edge gone" "listening on 192.168.0.1" 30 sdstatus
+wait_for "streams keep using the VPN with the edge gone" "edge=192.0.2.30 src=198.51.100.14" 60 \
+	"${CURL[@]}" --resolve tv.stream.example:443:192.168.0.1 https://tv.stream.example/
+ip -n "$EDGE" link set wan0 up
+wait_for "connector back on its edge" "Transport: udp" 60 bash -c "ip netns exec $SITE $BIN/ingressd-connector --state $STATE status | tr -s ' '"
+
 # --- fail closed: with every exit down nothing is relayed elsewhere ---
 ip -n "$VPN" link del wg0
 wait_for "VPN exit reported down" "nl-vpn VPN on this connector false" 150 sdstatus
@@ -225,7 +242,10 @@ reject "nothing is relayed with every exit down" "${CURL[@]}" --fail --resolve t
 
 # --- Smart DNS off ---
 write_conf "" yes
-wait_for "connector stops Smart DNS without a config" "turned off" 60 cat "$TMP/conn.log"
+sleep 3
+expect "an edge dropping the config does not stop Smart DNS" "listening on 192.168.0.1" sdstatus
+write_conf "$(echo '{}' | "$SD" sign -seed "$SEED" -connector "$CONN_KEY" -issued $T2)" yes
+wait_for "a signed config without exits turns Smart DNS off" "turned off" 60 cat "$TMP/conn.log"
 
 if [[ $FAIL -ne 0 ]]; then
 	for f in serve conn cdn-dns cdn-http; do echo "--- $f.log (tail) ---"; tail -40 "$TMP/$f.log" 2>/dev/null || true; done

@@ -119,12 +119,13 @@ func TestSmartDNSConfigTrust(t *testing.T) {
 	if r := c.report(); !strings.Contains(r.Error, `for connector "someone-else"`) {
 		t.Errorf("other site: %+v", r)
 	}
+	// An edge offering an older config changes nothing, also after a restart.
 	c.mu.Lock()
-	c.applied = "" // as after a restart: only the persisted issue time guards
+	c.applied = ""
 	c.mu.Unlock()
 	setBlob(s, signedSite(t, key, me, t0.Add(-time.Minute), nodeExitSite()))
 	c.update()
-	if r := c.report(); !strings.Contains(r.Error, "older than the one in effect") {
+	if r := c.report(); r.Error != "" || !r.Issued.Equal(t0) || r.Listen != "127.0.0.1" {
 		t.Errorf("replay: %+v", r)
 	}
 
@@ -137,10 +138,25 @@ func TestSmartDNSConfigTrust(t *testing.T) {
 		t.Errorf("invalid: %+v", r)
 	}
 
-	// No edge carries a config: Smart DNS stops.
+	// With no edge carrying a config, as with every edge down, Smart DNS
+	// keeps running, also after a restart.
 	setBlob(s, nil)
 	c.update()
-	if r := c.report(); r.Listen != "" || len(r.Services) != 0 {
+	if r := c.report(); r.Listen != "127.0.0.1" || len(r.Services) != 1 {
+		t.Errorf("edges gone: %+v", r)
+	}
+	c.mu.Lock()
+	c.applied, c.listen = "", ""
+	c.mu.Unlock()
+	c.update()
+	if r := c.report(); r.Listen != "127.0.0.1" || len(r.Services) != 1 || r.Error != "" {
+		t.Errorf("restart with no edges: %+v", r)
+	}
+
+	// Only a signed config without exits turns it off.
+	setBlob(s, signedSite(t, key, me, t0.Add(3*time.Minute), config.SmartDNSSite{}))
+	c.update()
+	if r := c.report(); r.Listen != "" || len(r.Services) != 0 || r.Error != "" {
 		t.Errorf("off: %+v", r)
 	}
 }
