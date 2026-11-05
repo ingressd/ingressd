@@ -143,16 +143,16 @@ func methodOf(kind string) string {
 	return m
 }
 
-func (c *Config) validateProviders(v *validator, a *Access) {
+func (c *Config) validateProviders(v *validator, prefix string, a *Access) {
 	if len(a.Providers) == 0 {
 		return
 	}
 	if a.PortalURL != "" {
-		v.add("access.providers", "sign-in providers of a node on an external portal (portal_url) are configured on the portal (the ingressd panel), not here")
+		v.add(prefix+".providers", "sign-in providers of a node on an external portal (portal_url) are configured on the portal (the ingressd panel), not here")
 	}
 	for _, name := range sortedKeys(a.Providers) {
 		p := a.Providers[name]
-		path := "access.providers." + name
+		path := prefix + ".providers." + name
 		if !slices.Contains(Providers, name) {
 			v.add(path, "unknown provider %q (use %s)", name, strings.Join(Providers, ", "))
 			continue

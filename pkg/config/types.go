@@ -36,6 +36,12 @@ const (
 
 	// MaxTunnelNameLen keeps interface names within Linux's 15-byte limit.
 	MaxTunnelNameLen = 12
+
+	// TunnelTableMin and TunnelTableMax bound the routing tables (and
+	// fwmarks) of remapped tunnels; Smart DNS VPN exits use the tables from
+	// TunnelTableMax+1 up.
+	TunnelTableMin = 1000
+	TunnelTableMax = 1899
 )
 
 // InterfaceName is the edge's WireGuard interface for a tunnel.
@@ -62,6 +68,8 @@ type Config struct {
 	Backups       Backups                 `yaml:"backups"`
 	SmartDNS      *SmartDNS               `yaml:"smartdns"`
 	Mesh          *Mesh                   `yaml:"mesh"`
+	// Realms are isolated tenants sharing this node (see realms.go).
+	Realms map[string]Realm `yaml:"realms,omitempty"`
 }
 
 type Edge struct {
@@ -117,9 +125,14 @@ type Tunnel struct {
 	// VirtualPrefix remaps Subnets to a unique range on the edge, for sites
 	// whose LANs overlap. Empty means no remapping.
 	VirtualPrefix string `yaml:"virtual_prefix"`
-	Keepalive     int    `yaml:"keepalive"`
-	PublicKey     string `yaml:"public_key"`
-	FallbackWS    bool   `yaml:"fallback_ws"`
+	// Table pins a remapped tunnel's routing table and fwmark, so adding or
+	// removing another tunnel never renumbers it. 0: TableBase + the
+	// tunnel's index in sorted name order.
+	Table      int    `yaml:"table,omitempty"`
+	Realm      string `yaml:"realm,omitempty"`
+	Keepalive  int    `yaml:"keepalive"`
+	PublicKey  string `yaml:"public_key"`
+	FallbackWS bool   `yaml:"fallback_ws"`
 	// SiteDNS goes in the generated site config's DNS line. ingressd does not
 	// use it (only edge traffic enters the tunnel), but some importers such
 	// as UniFi's require one. Default 1.1.1.1.
@@ -153,6 +166,7 @@ type Pool struct {
 	Health       *HealthCheck `yaml:"health"`
 	Origins      []Origin     `yaml:"origins"`
 	Fallback     string       `yaml:"fallback"`
+	Realm        string       `yaml:"realm,omitempty"`
 }
 
 type Sticky struct {
@@ -190,6 +204,7 @@ type App struct {
 	Pool   string   `yaml:"pool"`
 	Origin string   `yaml:"origin"`
 	Tunnel string   `yaml:"tunnel"`
+	Realm  string   `yaml:"realm,omitempty"`
 
 	Headers   *Headers   `yaml:"headers"`
 	Proxy     *Proxy     `yaml:"proxy"`

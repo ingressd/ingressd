@@ -125,6 +125,9 @@ type Log struct {
 type Group struct {
 	Emails       []string `yaml:"emails"`
 	EmailDomains []string `yaml:"email_domains"`
+	// Realm is omitted from JSON when empty so policy versions (which hash
+	// the groups a policy uses) stay unchanged for configs without realms.
+	Realm string `yaml:"realm,omitempty" json:",omitempty"`
 }
 
 // ServiceToken authenticates machines with Edge-Client-Id/Edge-Client-Secret,
@@ -138,6 +141,7 @@ type ServiceToken struct {
 	// no client id. edge_auth removes the header before the request
 	// reaches the origin. The secret must be at least 16 characters.
 	Header string `yaml:"header,omitempty"`
+	Realm  string `yaml:"realm,omitempty"`
 }
 
 // Policy decides who may reach an app. Policies are listed per app; the
@@ -150,6 +154,9 @@ type Policy struct {
 	// Session is the lifetime of app cookies minted under this policy
 	// (default 24h).
 	Session Duration `yaml:"session"`
+	// Realm is omitted from JSON when empty: Engine.Version hashes the
+	// policy's JSON, and configs without realms must keep their versions.
+	Realm string `yaml:"realm,omitempty" json:",omitempty"`
 }
 
 // Selector matches one property of a request. Exactly one field is set.
@@ -346,10 +353,15 @@ func (d Date) MarshalYAML() (any, error) {
 }
 
 func (c *Config) applyAccessDefaults() {
-	if c.Access == nil {
+	// With realms the top-level block stays absent (validation refuses it):
+	// each realm carries its own.
+	if c.Access == nil && len(c.Realms) == 0 {
 		c.Access = &Access{}
 	}
-	defaultAccess(c.Access)
+	if c.Access != nil {
+		defaultAccess(c.Access)
+	}
+	c.applyRealmDefaults()
 	if s := c.Email.SMTP; s != nil {
 		if s.Port == 0 {
 			s.Port = 587
@@ -403,95 +415,29 @@ func (c *Config) validateAccess(v *validator) {
 		a = &Access{}
 		defaultAccess(a)
 	}
-	protected := false
-	for _, app := range c.Apps {
-		protected = protected || app.Protected()
-	}
-	if a.PortalHost != "" {
-		if !validHostname(a.PortalHost, false) {
-			v.add("access.portal_host", "invalid hostname %q", a.PortalHost)
+	if len(c.Realms) == 0 {
+		protected := false
+		for _, app := range c.Apps {
+			protected = protected || app.Protected()
 		}
-		if a.PortalHost == c.Edge.Admin.Hostname {
-			v.add("access.portal_host", "must differ from edge.admin.hostname")
+		c.validateAccessBlock(v, "access", a)
+		if a.PortalHost == "" && protected && a.PortalURL == "" {
+			v.add("access.portal_host", "is required when an app has access policies")
 		}
-		for _, name := range sortedKeys(c.Apps) {
-			if slices.Contains(c.Apps[name].Hosts, a.PortalHost) {
-				v.add("access.portal_host", "%q is already served by app %q", a.PortalHost, name)
-			}
+		// Login-to-play needs email too, but its policy and provider are
+		// checked when a player signs in (the page explains what is missing).
+		if protected || c.Email.Provider != "" {
+			c.validateEmail(v)
 		}
-	} else if protected && a.PortalURL == "" {
-		v.add("access.portal_host", "is required when an app has access policies")
-	}
-	if a.PortalURL != "" {
-		u, err := url.Parse(a.PortalURL)
-		switch {
-		case err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "":
-			v.add("access.portal_url", "must be an http(s) URL without query, e.g. https://auth.ingressd.com/a/org")
-		case a.PortalHost != "":
-			v.add("access.portal_url", "set portal_host or portal_url, not both")
-		case a.SessionKey == "" || a.JWTKey == "":
-			v.add("access.portal_url", "needs org-wide keys (session_key and jwt_key)")
-		}
-	}
-	if a.Session < Duration(time.Minute) {
-		v.add("access.session", "must be at least 1m")
-	}
-	o := a.OTP
-	if o.Length < 4 || o.Length > 8 {
-		v.add("access.otp.length", "must be 4-8, got %d", o.Length)
-	}
-	if o.TTL < Duration(time.Minute) || o.TTL > Duration(15*time.Minute) {
-		v.add("access.otp.ttl", "must be 1m-15m")
-	}
-	if o.Attempts < 1 || o.Attempts > 20 {
-		v.add("access.otp.attempts", "must be 1-20, got %d", o.Attempts)
-	}
-	if o.ResendCooldown < 0 {
-		v.add("access.otp.resend_cooldown", "must not be negative")
-	}
-	for name, rl := range map[string]RateLimit{"per_email": o.PerEmail, "per_ip": o.PerIP} {
-		if rl.Codes < 1 || rl.Window <= 0 {
-			v.add("access.otp."+name, "codes and window must be positive")
-		}
-	}
-	if o.Lockout <= 0 {
-		v.add("access.otp.lockout", "must be positive")
-	}
-	if u := a.Branding.LogoURL; u != "" && !strings.HasPrefix(u, "https://") {
-		v.add("access.branding.logo_url", "must be an https:// URL")
-	}
-	if !colorRe.MatchString(a.Branding.Color) {
-		v.add("access.branding.color", "must be #rgb or #rrggbb, got %q", a.Branding.Color)
-	}
-	if (a.SessionKey == "") != (a.JWTKey == "") {
-		v.add("access", "set both session_key and jwt_key, or neither")
-	}
-	for name, ref := range map[string]string{"session_key": a.SessionKey, "jwt_key": a.JWTKey} {
-		if ref != "" && !strings.HasPrefix(ref, "secret://") {
-			v.add("access."+name, "must be a secret:// reference")
-		}
-	}
-	for _, who := range sortedKeys(a.RevokedBefore) {
-		if who != "*" && !validPasskeyPrincipal(who) && (!strings.Contains(who, "@") || who != strings.ToLower(who)) {
-			v.add("access.revoked_before."+who, "key must be a lowercase email address, passkey:<name> or *")
-		}
-	}
-	for i, sid := range a.RevokedSessions {
-		if sid == "" || len(sid) > 128 || strings.ContainsFunc(sid, unicode.IsSpace) {
-			v.add(fmt.Sprintf("access.revoked_sessions[%d]", i), "invalid session id")
-		}
-	}
-	// Login-to-play needs email too, but its policy and provider are
-	// checked when a player signs in (the page explains what is missing).
-	if protected || c.Email.Provider != "" {
+	} else if c.Email.Provider != "" {
 		c.validateEmail(v)
 	}
 
 	for _, name := range sortedKeys(c.Groups) {
 		g := c.Groups[name]
 		p := "groups." + name
-		if !nameRe.MatchString(name) {
-			v.add(p, "name must match %s", nameRe)
+		if !qualifiedNameRe.MatchString(name) {
+			v.add(p, "name must match %s", qualifiedNameRe)
 		}
 		if len(g.Emails) == 0 && len(g.EmailDomains) == 0 {
 			v.add(p, "needs emails or email_domains")
@@ -510,8 +456,8 @@ func (c *Config) validateAccess(v *validator) {
 	for _, name := range sortedKeys(c.ServiceTokens) {
 		t := c.ServiceTokens[name]
 		p := "service_tokens." + name
-		if !nameRe.MatchString(name) {
-			v.add(p, "name must match %s", nameRe)
+		if !qualifiedNameRe.MatchString(name) {
+			v.add(p, "name must match %s", qualifiedNameRe)
 		}
 		if t.Header != "" {
 			validTokenHeader(v, p+".header", t.Header)
@@ -530,8 +476,6 @@ func (c *Config) validateAccess(v *validator) {
 		}
 	}
 
-	c.validateProviders(v, a)
-
 	for _, name := range sortedKeys(c.Policies) {
 		c.validatePolicy(v, name, c.Policies[name])
 	}
@@ -540,7 +484,11 @@ func (c *Config) validateAccess(v *validator) {
 		app := c.Apps[name]
 		p := "apps." + name
 		c.validatePolicyList(v, p+".access", app.Access)
-		c.validateLoginMethods(v, a, p+".login_methods", app.LoginMethods)
+		appAccess := a
+		if len(c.Realms) > 0 {
+			appAccess = c.RealmAccess(app.Realm)
+		}
+		c.validateLoginMethods(v, appAccess, p+".login_methods", app.LoginMethods)
 		for i, r := range app.Paths {
 			rp := fmt.Sprintf("%s.paths[%d]", p, i)
 			if !strings.HasPrefix(r.Match, "/") || strings.Contains(strings.TrimSuffix(r.Match, "*"), "*") {
@@ -556,6 +504,84 @@ func (c *Config) validateAccess(v *validator) {
 			c.validatePolicyList(v, rp+".access", r.Access)
 		}
 	}
+}
+
+// validateAccessBlock checks one access block (top-level, or a realm's at
+// path p).
+func (c *Config) validateAccessBlock(v *validator, p string, a *Access) {
+	if a.PortalHost != "" {
+		if !validHostname(a.PortalHost, false) {
+			v.add(p+".portal_host", "invalid hostname %q", a.PortalHost)
+		}
+		if a.PortalHost == c.Edge.Admin.Hostname {
+			v.add(p+".portal_host", "must differ from edge.admin.hostname")
+		}
+		for _, name := range sortedKeys(c.Apps) {
+			if slices.Contains(c.Apps[name].Hosts, a.PortalHost) {
+				v.add(p+".portal_host", "%q is already served by app %q", a.PortalHost, name)
+			}
+		}
+	}
+	if a.PortalURL != "" {
+		u, err := url.Parse(a.PortalURL)
+		switch {
+		case err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "":
+			v.add(p+".portal_url", "must be an http(s) URL without query, e.g. https://auth.ingressd.com/a/org")
+		case a.PortalHost != "":
+			v.add(p+".portal_url", "set portal_host or portal_url, not both")
+		case a.SessionKey == "" || a.JWTKey == "":
+			v.add(p+".portal_url", "needs org-wide keys (session_key and jwt_key)")
+		}
+	}
+	if a.Session < Duration(time.Minute) {
+		v.add(p+".session", "must be at least 1m")
+	}
+	o := a.OTP
+	if o.Length < 4 || o.Length > 8 {
+		v.add(p+".otp.length", "must be 4-8, got %d", o.Length)
+	}
+	if o.TTL < Duration(time.Minute) || o.TTL > Duration(15*time.Minute) {
+		v.add(p+".otp.ttl", "must be 1m-15m")
+	}
+	if o.Attempts < 1 || o.Attempts > 20 {
+		v.add(p+".otp.attempts", "must be 1-20, got %d", o.Attempts)
+	}
+	if o.ResendCooldown < 0 {
+		v.add(p+".otp.resend_cooldown", "must not be negative")
+	}
+	for name, rl := range map[string]RateLimit{"per_email": o.PerEmail, "per_ip": o.PerIP} {
+		if rl.Codes < 1 || rl.Window <= 0 {
+			v.add(p+".otp."+name, "codes and window must be positive")
+		}
+	}
+	if o.Lockout <= 0 {
+		v.add(p+".otp.lockout", "must be positive")
+	}
+	if u := a.Branding.LogoURL; u != "" && !strings.HasPrefix(u, "https://") {
+		v.add(p+".branding.logo_url", "must be an https:// URL")
+	}
+	if !colorRe.MatchString(a.Branding.Color) {
+		v.add(p+".branding.color", "must be #rgb or #rrggbb, got %q", a.Branding.Color)
+	}
+	if (a.SessionKey == "") != (a.JWTKey == "") {
+		v.add(p, "set both session_key and jwt_key, or neither")
+	}
+	for name, ref := range map[string]string{"session_key": a.SessionKey, "jwt_key": a.JWTKey} {
+		if ref != "" && !strings.HasPrefix(ref, "secret://") {
+			v.add(p+"."+name, "must be a secret:// reference")
+		}
+	}
+	for _, who := range sortedKeys(a.RevokedBefore) {
+		if who != "*" && !validPasskeyPrincipal(who) && (!strings.Contains(who, "@") || who != strings.ToLower(who)) {
+			v.add(p+".revoked_before."+who, "key must be a lowercase email address, passkey:<name> or *")
+		}
+	}
+	for i, sid := range a.RevokedSessions {
+		if sid == "" || len(sid) > 128 || strings.ContainsFunc(sid, unicode.IsSpace) {
+			v.add(fmt.Sprintf("%s.revoked_sessions[%d]", p, i), "invalid session id")
+		}
+	}
+	c.validateProviders(v, p, a)
 }
 
 func (c *Config) validateEmail(v *validator) {
@@ -624,8 +650,8 @@ var edgeSelectors = []string{"everyone", "ip", "service_token"}
 
 func (c *Config) validatePolicy(v *validator, name string, pol Policy) {
 	p := "policies." + name
-	if !nameRe.MatchString(name) {
-		v.add(p, "name must match %s", nameRe)
+	if !qualifiedNameRe.MatchString(name) {
+		v.add(p, "name must match %s", qualifiedNameRe)
 	}
 	switch pol.Action {
 	case ActionAllow, ActionDeny, ActionBypass, ActionServiceAuth:
