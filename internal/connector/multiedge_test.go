@@ -42,7 +42,7 @@ func multiEdgeServer(t *testing.T) (*Server, wgtypes.Key, wgtypes.Key, *config.C
 	tun.Transit = "100.64.0.4/30"
 	tun.PublicKey = site.PublicKey().String()
 	tun.Siblings = []config.TunnelSibling{
-		{Node: "nod_b", Endpoint: "b.example.test:51822", EdgePublicKey: sib.PublicKey().String(), Transit: "100.64.0.8/30", WSURL: "wss://b.example.test/.ingressd/tunnel/cloud"},
+		{Node: "nod_b", Endpoint: "b.example.test:51822", EdgePublicKey: sib.PublicKey().String(), Transit: "100.64.0.8/30", WSURL: "wss://b.example.test/.ingressd/tunnel/cloud", Priority: 2, PoP: "ams"},
 		{Node: "nod_bad", Endpoint: "c.example.test:51822", Transit: "100.64.0.12/30"}, // no key yet: omitted
 	}
 	cfg.Tunnels["cloud"] = tun
@@ -67,7 +67,8 @@ func TestTunnelConfigSiblings(t *testing.T) {
 	}
 	sb := tc.Siblings[0]
 	if sb.Node != "nod_b" || sb.Endpoint != "b.example.test:51822" || sb.Address != "100.64.0.10/30" || sb.EdgeAddress != "100.64.0.9" ||
-		sb.WSURL != "wss://b.example.test/.ingressd/tunnel/cloud" || sb.EdgePublicKey != cfg.Tunnels["cloud"].Siblings[0].EdgePublicKey {
+		sb.WSURL != "wss://b.example.test/.ingressd/tunnel/cloud" || sb.EdgePublicKey != cfg.Tunnels["cloud"].Siblings[0].EdgePublicKey ||
+		sb.Priority != 2 || sb.PoP != "ams" {
 		t.Errorf("sibling %+v", sb)
 	}
 	before := tc.Revision

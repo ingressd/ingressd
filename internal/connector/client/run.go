@@ -503,24 +503,20 @@ func (s *session) allowedIPs(e *edge) []netip.Prefix {
 	return out
 }
 
-// updateOwner gives 0.0.0.0/0 to the first edge (in state order) that is
-// up, keeping the current owner while it stays up.
+// updateOwner gives 0.0.0.0/0 to the best edge (priority, then RTT) that
+// is up, keeping the current owner while it stays up: moving the route
+// breaks every transparent flow in progress.
 func (s *session) updateOwner() {
 	if !s.transparent() {
 		return
 	}
 	s.mu.Lock()
 	cur := s.edges[s.owner]
-	var order []*edge
-	for _, es := range s.st.Edges {
-		if k, err := wgtypes.ParseKey(es.Config.EdgePublicKey); err == nil && s.edges[k] != nil {
-			order = append(order, s.edges[k])
-		}
-	}
 	s.mu.Unlock()
 	if cur != nil && cur.tunnelUp() {
 		return
 	}
+	order := s.rankedEdges()
 	for _, e := range order {
 		if e.tunnelUp() {
 			s.mu.Lock()
@@ -596,6 +592,7 @@ func (s *session) snapshot() Status {
 		}
 	}
 	tunnel := s.st.Tunnel()
+	info := siblingInfo(s.st)
 	s.mu.Unlock()
 	now := time.Now().UTC()
 	st := Status{
@@ -609,6 +606,7 @@ func (s *session) snapshot() Status {
 	pollOK := false
 	for _, e := range edges {
 		es := e.status(ps[e.key])
+		es.Priority, es.PoP = info[es.EdgePublicKey].Priority, info[es.EdgePublicKey].PoP
 		st.Edges = append(st.Edges, es)
 		if es.LastPoll.After(st.LastPoll) {
 			st.LastPoll = es.LastPoll
@@ -618,9 +616,11 @@ func (s *session) snapshot() Status {
 		}
 	}
 	for i := range st.Edges {
-		if st.Edges[i].Up(now) {
+		if !st.Edges[i].Up(now) {
+			continue
+		}
+		if best == nil || compareRank(statusRank(st.Edges[i]), statusRank(*best)) < 0 {
 			best = &st.Edges[i]
-			break
 		}
 	}
 	if best == nil && len(st.Edges) > 0 {

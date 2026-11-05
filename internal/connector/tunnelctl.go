@@ -201,6 +201,8 @@ func siblings(t config.Tunnel) []proto.Sibling {
 			Address:       netip.PrefixFrom(render.SiteAddr(p), p.Bits()).String(),
 			EdgeAddress:   render.EdgeAddr(p).String(),
 			WSURL:         sb.WSURL,
+			Priority:      sb.Priority,
+			PoP:           sb.PoP,
 		})
 	}
 	return out

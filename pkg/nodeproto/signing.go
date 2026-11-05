@@ -48,10 +48,10 @@ const (
 // signedTypes are the panel → node messages that change node state, mint
 // or return secrets, or reveal node-local data (connector enrolment
 // tokens, router WireGuard configs, detach, L4 allowlist entries, session
-// revocations, LAN discovery, Smart DNS lookups, live access logs,
-// diagnostics, updates). Replies to node-initiated requests
+// revocations, LAN discovery, Smart DNS lookups, live access logs, live
+// metrics, diagnostics, updates). Replies to node-initiated requests
 // (auth_otp_*_result, storage_response) and keepalives (ping, usage_ack,
-// live_unsubscribe) are not in the set; snapshots carry their own signature.
+// live_unsubscribe, metrics_ack, metrics_unsubscribe) are not in the set; snapshots carry their own signature.
 var signedTypes = map[string]bool{
 	TypeConnectorTokenRequest: true,
 	TypeSiteConfigRequest:     true,
@@ -61,6 +61,7 @@ var signedTypes = map[string]bool{
 	TypeDiscoverRequest:       true,
 	TypeSmartDNSRecentRequest: true,
 	TypeLiveSubscribe:         true,
+	TypeMetricsSubscribe:      true,
 	TypeDiagRequest:           true,
 	TypeUpgradeRequest:        true,
 	TypeConnectorUpdate:       true,

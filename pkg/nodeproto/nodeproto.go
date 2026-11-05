@@ -137,6 +137,8 @@ type Hello struct {
 	Capabilities    []string `json:"capabilities,omitempty"` // e.g. "smartdns", "mesh", "l4"
 	AppliedRevision int64    `json:"applied_revision"`
 	UsageSeq        int64    `json:"usage_seq"` // last usage seq the node sent
+	// MetricsSeq is the last metrics seq the node produced (additive).
+	MetricsSeq int64 `json:"metrics_seq,omitempty"`
 	// MeshPublicKey is the node's WireGuard key for the org mesh (generated
 	// and kept on the node); the panel distributes it to the other nodes.
 	MeshPublicKey string `json:"mesh_public_key,omitempty"`
@@ -211,6 +213,20 @@ type TunnelStatus struct {
 	ConnectorOS      string                `json:"connector_os,omitempty"`
 	ConnectorArch    string                `json:"connector_arch,omitempty"`
 	ConnectorUpdate  *ConnectorUpdateState `json:"connector_update,omitempty"`
+	// ConnectorEdges is the connector's last report of every edge of the
+	// site (connector sites, additive), so RTTs to all nodes can be read
+	// from any one of them.
+	ConnectorEdges []ConnectorEdge `json:"connector_edges,omitempty"`
+}
+
+// ConnectorEdge is one edge as a connector reported it. RTTMillis is the
+// connector's smoothed round trip through the tunnel (0 = not measured).
+type ConnectorEdge struct {
+	Node          string  `json:"node,omitempty"`
+	EdgePublicKey string  `json:"edge_public_key,omitempty"`
+	RTTMillis     float64 `json:"rtt_ms,omitempty"`
+	Up            bool    `json:"up"`
+	Transport     string  `json:"transport,omitempty"`
 }
 
 // Certificate states.

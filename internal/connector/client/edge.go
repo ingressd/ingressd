@@ -67,6 +67,7 @@ type edge struct {
 	pollCancel  context.CancelFunc
 	discoverID  string
 	discovering atomic.Bool
+	rtt         ewma // round trip through the tunnel (rtt.go)
 }
 
 func newEdge(s *session, key wgtypes.Key, es EdgeState) *edge {
@@ -132,10 +133,11 @@ func (e *edge) label() string {
 func (e *edge) start(ctx context.Context) {
 	ctx, e.cancel = context.WithCancel(ctx)
 	e.runCtx = ctx
-	e.wg.Add(3)
+	e.wg.Add(4)
 	go func() { defer e.wg.Done(); e.transportLoop(ctx) }()
 	go func() { defer e.wg.Done(); e.controlLoop(ctx) }()
 	go func() { defer e.wg.Done(); e.reportLoop(ctx) }()
+	go func() { defer e.wg.Done(); e.rttLoop(ctx) }()
 }
 
 func (e *edge) stop() {
@@ -395,6 +397,9 @@ func (e *edge) lost() {
 
 func (e *edge) setTransport(t, endpoint string, mtu int) {
 	e.mu.Lock()
+	if t != e.transport {
+		e.rtt.reset() // another path: old samples no longer apply
+	}
 	e.transport, e.endpoint, e.mtu = t, endpoint, mtu
 	e.mu.Unlock()
 	e.s.applyMTU()
@@ -425,7 +430,7 @@ func (e *edge) status(p peerStats) EdgeStatus {
 		Address: e.cfg.Config.Address, EdgeAddress: e.cfg.Config.EdgeAddress, Learned: e.cfg.Learned,
 		Transport: e.transport, Endpoint: e.endpoint,
 		LastHandshake: p.LastHandshake, RxBytes: p.RxBytes, TxBytes: p.TxBytes,
-		LastPoll: e.lastPoll, PollError: e.pollErr,
+		LastPoll: e.lastPoll, PollError: e.pollErr, RTTMillis: millis(e.rtt.value()),
 	}
 }
 
@@ -621,6 +626,7 @@ func (e *edge) reportLoop(ctx context.Context) {
 			OS: runtime.GOOS, Arch: runtime.GOARCH, Install: e.s.upd.install, Update: e.s.upd.snapshot(),
 		}
 		h.Reachability = testReachability(ctx, e.s.stateCopy().Targets())
+		h.Edges = e.s.edgeReports()
 		if err := e.postJSON(ctx, proto.ReportPath, h); err != nil && ctx.Err() == nil && !errors.Is(err, errNoPath) {
 			e.s.log.Warn("health report", "edge", e.label(), "err", err)
 		}

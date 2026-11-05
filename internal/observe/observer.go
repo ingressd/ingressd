@@ -48,6 +48,7 @@ type Observer struct {
 	retention time.Duration
 	counters  map[string]*Totals // per aggregate host, since start
 	usage     map[string]*Totals // per exact host since the last TakeUsage (usage.go)
+	metrics   MetricsWindow      // since the last TakeMetrics (edgemetrics.go)
 
 	ingested atomic.Int64
 	dropped  atomic.Int64
@@ -128,6 +129,7 @@ func (o *Observer) Add(e Entry) {
 	}
 	c.add(e)
 	o.meter(e)
+	o.metrics.add(e)
 	keep := o.sampling >= 1 || rand.Float64() < o.sampling
 	if o.opts.Store != nil {
 		if len(o.pending.entries) >= 50000 {
