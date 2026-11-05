@@ -155,8 +155,8 @@ func TestRealmsValidation(t *testing.T) {
 			"access: is not allowed alongside realms"},
 		{"open tunnel input refused", func(c *Config) { c.Security.TunnelInput = "" },
 			"security.tunnel_input: must be restricted alongside realms"},
-		{"smartdns refused", func(c *Config) { c.SmartDNS = &SmartDNS{} },
-			"smartdns: is not supported alongside realms yet"},
+		{"top-level smartdns refused", func(c *Config) { c.SmartDNS = &SmartDNS{} },
+			"smartdns: is not allowed alongside realms (it would serve every realm's tunnels); use realms.<name>.smartdns"},
 		{"protected app needs realm access", func(c *Config) { c.Realms["tq7k2m"] = Realm{} },
 			`realms.tq7k2m.access: is required: app "tq7k2m.nas" of this realm has access policies`},
 		{"realm without protected apps needs no access", func(c *Config) {

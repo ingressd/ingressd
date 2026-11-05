@@ -155,7 +155,7 @@ func TestWatchEgressTracesAndReports(t *testing.T) {
 	m := New(Options{Device: wg.device, Configure: wg.configure, TraceURL: srv.URL})
 	// A direct exit (no interface) so the trace can reach the test server.
 	e := &egress{exit: "nl", country: "NL", public: "198.51.100.6", device: wg.device}
-	m.st.Store(&state{egress: map[string]*egress{"nl": e}, match: matcher{}, site: map[netip.Addr]string{}})
+	m.st.Store(&state{egress: map[string]*egress{"nl": e}, exits: map[string]exitInfo{"nl": {}}, byAddr: map[netip.Addr]*scope{}, site: map[netip.Addr]string{}})
 	m.watchEgress(time.Now())
 	deadline := time.Now().Add(3 * time.Second)
 	for {

@@ -96,7 +96,12 @@ func (m *Manager) handleRelay(c net.Conn, isTLS bool) {
 		return
 	}
 	st := m.state()
-	r, ok := st.match.match(host)
+	sc := st.scopeAt(netAddr(c.LocalAddr()))
+	if sc == nil {
+		m.refused.Add(1)
+		return
+	}
+	r, ok := sc.match.match(host)
 	if !ok {
 		m.refused.Add(1)
 		m.log.Info("relay refused: not a service hostname", "host", host, "client", client)
@@ -172,7 +177,7 @@ func (m *Manager) openUpstream(ctx context.Context, st *state, service, exit, ho
 		c, _, err := m.dialOrdered(ctx, e, host, addrs, port)
 		return c, errors.Is(err, errExitDown), err
 	}
-	c, err = m.remote.Connect(ctx, ex.Node, ConnectRequest{Exit: exit, Service: service, Host: host, Port: port, Addrs: addrs})
+	c, err = m.remote.Connect(ctx, ex.Node, ConnectRequest{Exit: exit, Realm: ex.realm, Service: service, Host: host, Port: port, Addrs: addrs})
 	if err != nil {
 		var refused *relayRefused
 		if !errors.As(err, &refused) {
@@ -214,9 +219,9 @@ func (m *Manager) handleExitRelay(c net.Conn) {
 		WriteConnectResponse(c, ConnectResponse{Error: msg, ExitDown: exitDown})
 		m.log.Warn("exit relay refused", "peer", peer, "exit", req.Exit, "host", req.Host, "reason", msg)
 	}
-	e, ok := m.state().egress[req.Exit]
-	if !ok {
-		refuse(fmt.Sprintf("exit %q is not hosted on this node", req.Exit), false)
+	e, err := m.selfExit(req.Realm, req.Exit)
+	if err != nil {
+		refuse(err.Error(), false)
 		return
 	}
 	if err := checkConnect(req); err != nil {

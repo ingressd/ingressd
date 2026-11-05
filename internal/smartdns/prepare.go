@@ -33,7 +33,8 @@ func Prepare(cfg *config.Config, st *secrets.Store) (bool, error) {
 		return st.Set(name, v)
 	}
 	for _, name := range cfg.VPNExits() {
-		ref := cfg.SmartDNS.Exits[name].VPN
+		e, _, _ := cfg.SmartDNSExit(name)
+		ref := e.VPN
 		text, err := st.Resolve(ref)
 		if err != nil {
 			return changed, fmt.Errorf("smartdns.exits.%s.vpn: %w", name, err)

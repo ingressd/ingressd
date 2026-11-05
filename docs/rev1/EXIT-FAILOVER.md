@@ -123,7 +123,7 @@ Mixed home and exit nodes: `GET /v1/exits` answers 404 on old exit nodes; the ho
 
 Failover is what makes VPN exits usable when nodes sit in several regions: a VPN exit needs to live on one or two nodes, not on every node, and every other node reaches it over the mesh. Placing two exits of a service on nodes in different PoPs gives node and region resilience with two provider configs (two devices on the user's VPN account), whatever the number of nodes.
 
-Hosting tenants' VPN exits on shared nodes also needs the per-exit routing table (today `1900 + index in name order`) to come from a per-node allocator instead of the name order, so tables stay stable as tenants come and go. That is part of the managed-network work, not this change.
+Hosting tenants' VPN exits on shared nodes needs stable per-exit routing tables: realm VPN exits must set `table` (1900–1999, allocated by the panel), so tables never shift as tenants come and go (see ARCHITECTURE.md §11, per-realm Smart DNS). The exit API carries the realm (`realm` in resolve and relay requests, `?realm=` on `GET /v1/exits`) and exit nodes refuse exits of any other realm.
 
 ## 10. Tests
 

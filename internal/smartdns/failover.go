@@ -52,9 +52,9 @@ func (m *Manager) activeFor(r route) *activeExit {
 
 // pruneActive drops the state of services that are gone or whose exit list
 // changed.
-func (m *Manager) pruneActive(match matcher) {
+func (m *Manager) pruneActive(routes []route) {
 	want := map[string][]string{}
-	for _, r := range match {
+	for _, r := range routes {
 		want[r.Service] = r.Exits
 	}
 	m.activeMu.Lock()
@@ -66,12 +66,7 @@ func (m *Manager) pruneActive(match matcher) {
 	}
 }
 
-func failbackAfter(st *state) time.Duration {
-	if st.cfg == nil {
-		return 0
-	}
-	return st.cfg.SmartDNS.FailbackDuration()
-}
+func failbackAfter(st *state, r route) time.Duration { return st.failback(r.Realm) }
 
 // pick returns the exit new connections of r use, or errExitDown with every
 // exit's reason when none is up (fail closed).
@@ -97,7 +92,7 @@ func (m *Manager) pick(st *state, r route) (string, error) {
 	}
 
 	if cur := slices.Index(r.Exits, a.current); cur >= 0 && up[cur] {
-		hold := failbackAfter(st)
+		hold := failbackAfter(st, r)
 		for i := range cur {
 			if up[i] && now.Sub(a.healthy[r.Exits[i]]) >= hold {
 				m.log.Info(fmt.Sprintf("service %s: exit %s healthy for %s, failing back from %s", r.Service, r.Exits[i], now.Sub(a.healthy[r.Exits[i]]).Round(time.Second), a.current))
@@ -125,7 +120,7 @@ func (m *Manager) pick(st *state, r route) (string, error) {
 			m.log.Warn(fmt.Sprintf("service %s: exit %s down (%s), using %s", r.Service, from, reason, e))
 		}
 		a.set(e, now)
-		a.message = a.reasonLocked(r.Exits, up, why, i, failbackAfter(st), now)
+		a.message = a.reasonLocked(r.Exits, up, why, i, failbackAfter(st, r), now)
 		return e, nil
 	}
 
@@ -169,7 +164,7 @@ func (a *activeExit) reasonLocked(exits []string, up []bool, why []string, cur i
 // refreshActive runs pick for every service, so failover, failback and the
 // status follow health even while a service has no traffic.
 func (m *Manager) refreshActive(st *state) {
-	for _, r := range st.match.routes() {
+	for _, r := range st.allRoutes() {
 		m.pick(st, r)
 	}
 }
@@ -191,7 +186,7 @@ func (mt matcher) routes() []route {
 // Services reports each service's exits and the one in use.
 func (m *Manager) Services() []nodeproto.ServiceStatus {
 	out := []nodeproto.ServiceStatus{}
-	for _, r := range m.state().match.routes() {
+	for _, r := range m.state().allRoutes() {
 		a := m.activeFor(r)
 		a.mu.Lock()
 		s := nodeproto.ServiceStatus{Name: r.Service, Exits: slices.Clone(r.Exits), Active: a.current, Since: a.since.UTC(), Message: a.message}
@@ -202,19 +197,24 @@ func (m *Manager) Services() []nodeproto.ServiceStatus {
 	return out
 }
 
-// usedRemoteExits maps each mesh node to the remote exits that some enabled
-// service lists.
-func usedRemoteExits(st *state) map[string][]string {
-	out := map[string][]string{}
+// nodeRealm is an exit node as one realm sees it: its exits are asked for
+// per realm, and the exit node answers for that realm's exits only.
+type nodeRealm struct{ node, realm string }
+
+// usedRemoteExits maps each mesh node (per realm) to the remote exits that
+// some enabled service lists.
+func usedRemoteExits(st *state) map[nodeRealm][]string {
+	out := map[nodeRealm][]string{}
 	seen := map[string]bool{}
-	for _, r := range st.match.routes() {
+	for _, r := range st.allRoutes() {
 		for _, name := range r.Exits {
 			ex, ok := st.exit(name)
 			if !ok || ex.IsSelf() || seen[name] {
 				continue
 			}
 			seen[name] = true
-			out[ex.Node] = append(out[ex.Node], name)
+			k := nodeRealm{ex.Node, ex.realm}
+			out[k] = append(out[k], name)
 		}
 	}
 	for _, l := range out {
@@ -231,14 +231,15 @@ func (m *Manager) pollExitHealth(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, healthTimeout)
 	defer cancel()
 	var wg sync.WaitGroup
-	for node, exits := range usedRemoteExits(st) {
+	for k, exits := range usedRemoteExits(st) {
+		node := k.node
 		if !m.remote.Up(node) {
 			continue // the mesh probe already holds these exits down
 		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			h, err := m.remote.Health(ctx, node)
+			h, err := m.remote.Health(ctx, node, k.realm)
 			if errors.Is(err, errHealthUnsupported) {
 				m.noteHealthUnsupported(node, true)
 				return

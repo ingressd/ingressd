@@ -91,7 +91,7 @@ func newFailoverManager(t *testing.T) (*Manager, *fakeExits, *fakeClock) {
 }
 
 func bbcRoute(m *Manager) route {
-	r, _ := m.state().match.match("bbc.example")
+	r, _ := m.state().scopes[0].match.match("bbc.example")
 	return r
 }
 
@@ -161,8 +161,7 @@ func TestFailoverOrderAndStickiness(t *testing.T) {
 
 func TestFailbackImmediateWithZero(t *testing.T) {
 	m, fx, _ := newFailoverManager(t)
-	zero := config.Duration(0)
-	m.state().cfg.SmartDNS.FailbackAfter = &zero
+	m.state().scopes[0].failback = 0
 	fx.set(func() { fx.downNodes["nod_a"] = true })
 	if got := activeOf(t, m); got != "gb-b" {
 		t.Fatalf("active %s", got)

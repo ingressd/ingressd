@@ -64,21 +64,66 @@ type Options struct {
 
 // state is the configuration in effect, swapped atomically on reconfigure.
 type state struct {
-	cfg      *config.Config
-	match    matcher
-	upstream []string
-	egress   map[string]*egress    // self exits
-	site     map[netip.Addr]string // listen address -> tunnel name
-	listen   []netip.Addr
-	routes   string // fingerprint of services/exits, to invalidate the cache
+	cfg    *config.Config
+	scopes []*scope              // every Smart DNS block, the node's own first
+	byAddr map[netip.Addr]*scope // listen address -> the block serving it
+	exits  map[string]exitInfo   // every block's exits (names are unique)
+	egress map[string]*egress    // self exits
+	site   map[netip.Addr]string // listen address -> tunnel name
+	listen []netip.Addr
+	routes string // fingerprint of services/exits, to invalidate the cache
 }
 
-func (s *state) exit(name string) (config.SmartDNSExit, bool) {
-	if s.cfg == nil || s.cfg.SmartDNS == nil {
-		return config.SmartDNSExit{}, false
-	}
-	e, ok := s.cfg.SmartDNS.Exits[name]
+// scope is one Smart DNS block (config.SmartDNSScope): the node's own or a
+// realm's, answering only on its own listen addresses.
+type scope struct {
+	realm    string
+	match    matcher
+	upstream []string
+	failback time.Duration
+}
+
+// exitInfo is an exit and the realm whose block defines it.
+type exitInfo struct {
+	config.SmartDNSExit
+	realm string
+}
+
+func (s *state) exit(name string) (exitInfo, bool) {
+	e, ok := s.exits[name]
 	return e, ok
+}
+
+// scopeAt returns the block serving a listen address. The node's own block
+// also answers on addresses it does not list; a realm's never does.
+func (s *state) scopeAt(local netip.Addr) *scope {
+	if sc, ok := s.byAddr[local]; ok {
+		return sc
+	}
+	if len(s.scopes) > 0 && s.scopes[0].realm == "" {
+		return s.scopes[0]
+	}
+	return nil
+}
+
+// allRoutes returns one route per service of every block, sorted by service
+// (service names are unique across blocks).
+func (s *state) allRoutes() []route {
+	var out []route
+	for _, sc := range s.scopes {
+		out = append(out, sc.match.routes()...)
+	}
+	slices.SortFunc(out, func(a, b route) int { return strings.Compare(a.Service, b.Service) })
+	return out
+}
+
+func (s *state) failback(realm string) time.Duration {
+	for _, sc := range s.scopes {
+		if sc.realm == realm {
+			return sc.failback
+		}
+	}
+	return 0
 }
 
 type svcCounter struct{ bytes, conns atomic.Int64 }
@@ -166,7 +211,7 @@ func New(o Options) *Manager {
 	m.remote = meshExitClient{m.mesh}
 	m.listeners = &listenerSet{log: m.log, running: map[string]io.Closer{}, failed: map[string]string{}}
 	m.baseCtx.Store(ctxBox{context.Background()})
-	m.st.Store(&state{match: matcher{}, egress: map[string]*egress{}, site: map[netip.Addr]string{}})
+	m.st.Store(&state{byAddr: map[netip.Addr]*scope{}, exits: map[string]exitInfo{}, egress: map[string]*egress{}, site: map[netip.Addr]string{}})
 	m.mesh.Handle("POST /v1/resolve", m.resolveHandler())
 	m.mesh.Handle("GET /v1/exits", m.exitsHandler())
 	return m
@@ -210,17 +255,28 @@ func (m *Manager) Run(ctx context.Context) {
 // Call it after every successful apply (the kernel side, ix-mesh and VPN
 // interfaces, is applied by the pipeline first).
 func (m *Manager) Reconfigure(cfg *config.Config, res func(string) (string, error)) {
-	st := &state{cfg: cfg, match: newMatcher(cfg.SmartDNS), egress: map[string]*egress{}, site: map[netip.Addr]string{}}
-	if s := cfg.SmartDNS; s != nil {
+	st := &state{cfg: cfg, byAddr: map[netip.Addr]*scope{}, exits: map[string]exitInfo{}, egress: map[string]*egress{}, site: map[netip.Addr]string{}}
+	var fp []string
+	var checks []config.SmartDNSCheck
+	for _, block := range cfg.SmartDNSScopes() {
+		s := block.DNS
+		sc := &scope{realm: block.Realm, match: newMatcher(s, block.Realm), failback: s.FailbackDuration()}
 		for _, u := range s.Upstream {
-			st.upstream = append(st.upstream, hostPort(u))
+			sc.upstream = append(sc.upstream, hostPort(u))
 		}
+		st.scopes = append(st.scopes, sc)
+		for _, a := range block.Listen {
+			st.byAddr[a] = sc
+		}
+		checks = append(checks, s.Checks...)
 		for _, name := range sortedKeys(s.Exits) {
 			ex := s.Exits[name]
+			st.exits[name] = exitInfo{ex, block.Realm}
+			fp = append(fp, "e:"+name+"="+ex.Node+","+ex.VPN)
 			if !ex.IsSelf() {
 				continue
 			}
-			e := &egress{exit: name, country: ex.Country, dns: st.upstream, public: cfg.Edge.PublicIPv4, device: m.device}
+			e := &egress{exit: name, country: ex.Country, dns: sc.upstream, public: cfg.Edge.PublicIPv4, device: m.device}
 			if ex.VPN != "" {
 				e.ifname = config.VPNInterfaceName(name)
 				e.mark, _ = render.VPNMark(cfg, name)
@@ -245,13 +301,8 @@ func (m *Manager) Reconfigure(cfg *config.Config, res func(string) (string, erro
 			}
 			st.egress[name] = e
 		}
-		var fp []string
-		for _, name := range sortedKeys(s.Exits) {
-			ex := s.Exits[name]
-			fp = append(fp, "e:"+name+"="+ex.Node+","+ex.VPN)
-		}
-		st.routes = strings.Join(fp, ";")
 	}
+	st.routes = strings.Join(fp, ";")
 	st.listen = cfg.SmartDNSListen()
 	for _, name := range sortedKeys(cfg.Tunnels) {
 		if a, ok := cfg.TransitEdgeAddr(name); ok {
@@ -262,8 +313,8 @@ func (m *Manager) Reconfigure(cfg *config.Config, res func(string) (string, erro
 		m.cache.clear()
 	}
 	m.st.Store(st)
-	m.pruneActive(st.match)
-	m.edges.setChecks(cfg.SmartDNS)
+	m.pruneActive(st.allRoutes())
+	m.edges.setChecks(checks)
 	m.mesh.Reconfigure(cfg)
 
 	want := map[string]func() (io.Closer, error){}
@@ -419,15 +470,13 @@ func (m *Manager) Snapshot() Status {
 	for _, a := range st.listen {
 		s.Listen = append(s.Listen, a.String())
 	}
-	if st.cfg != nil && st.cfg.SmartDNS != nil {
-		for _, name := range sortedKeys(st.cfg.SmartDNS.Exits) {
-			ex := st.cfg.SmartDNS.Exits[name]
-			if ex.IsSelf() {
-				continue
-			}
-			up, msg := m.exitUp(st, name)
-			s.RemoteExits = append(s.RemoteExits, RemoteExit{Name: name, Node: ex.Node, Country: ex.Country, Up: up, Message: msg})
+	for _, name := range sortedKeys(st.exits) {
+		ex := st.exits[name]
+		if ex.IsSelf() {
+			continue
 		}
+		up, msg := m.exitUp(st, name)
+		s.RemoteExits = append(s.RemoteExits, RemoteExit{Name: name, Node: ex.Node, Country: ex.Country, Up: up, Message: msg})
 	}
 	return s
 }

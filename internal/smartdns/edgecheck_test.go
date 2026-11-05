@@ -32,7 +32,7 @@ func TestEdgeOrder(t *testing.T) {
 	seen := map[string]string{"18.0.0.5": "NL", "18.0.0.2": "UA", "18.0.0.9": "", "18.0.0.1": "NL", "18.0.0.7": "GB"}
 	var probes atomic.Int32
 	c := newEdgeChecker()
-	c.setChecks(&config.SmartDNS{Checks: []config.SmartDNSCheck{testCheck}})
+	c.setChecks([]config.SmartDNSCheck{testCheck})
 	c.probe = func(_ context.Context, _ *egress, ip netip.Addr, ck config.SmartDNSCheck) string {
 		probes.Add(1)
 		if ck.Field != "countryCode" {

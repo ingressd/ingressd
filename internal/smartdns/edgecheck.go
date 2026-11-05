@@ -82,12 +82,8 @@ func newEdgeChecker() *edgeChecker {
 	return c
 }
 
-// setChecks replaces the configured checks (smartdns.checks).
-func (c *edgeChecker) setChecks(s *config.SmartDNS) {
-	var checks []config.SmartDNSCheck
-	if s != nil {
-		checks = s.Checks
-	}
+// setChecks replaces the configured checks (smartdns.checks of every block).
+func (c *edgeChecker) setChecks(checks []config.SmartDNSCheck) {
 	c.checks.Store(&checks)
 }
 
