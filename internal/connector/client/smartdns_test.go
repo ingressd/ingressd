@@ -257,3 +257,31 @@ func TestSmartDNSChangeIsReportedAtOnce(t *testing.T) {
 		t.Fatal("new config not reported")
 	}
 }
+
+// A restart reads the config back from the state file, re-encoded.
+func TestSmartDNSConfigSurvivesRestartFromDisk(t *testing.T) {
+	c, s := newTestController(t)
+	_, key, _ := ed25519.GenerateKey(nil)
+	setBlob(s, signedSite(t, key, s.priv.PublicKey().String(), time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC), nodeExitSite()))
+	c.update()
+	if err := s.st.Save(s.r.StatePath); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := LoadState(s.r.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Edges[0].Config.SmartDNS = nil // the edge is gone
+	s2 := &session{r: s.r, st: st, priv: s.priv, log: s.log}
+	c2 := &sdController{statePath: c.statePath, log: s.log, vpns: map[string]*vpnExit{}, ctx: c.ctx}
+	c2.mgr = smartdns.New(smartdns.Options{Listen: fakeListen, ListenPacket: fakeListenPacket})
+	id, _, err := ensureAgeIdentity(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c2.attach(s2, id)
+	if r := c2.report(); r.Error != "" || r.Listen != "127.0.0.1" || len(r.Services) != 1 {
+		t.Fatalf("after a restart with the edge gone: %+v", r)
+	}
+}

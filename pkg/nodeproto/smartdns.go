@@ -3,6 +3,7 @@
 package nodeproto
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -36,14 +37,21 @@ type SignedSmartDNS struct {
 	Signature string          `json:"signature"`
 }
 
-// SmartDNSSigningPayload is what the org key signs.
+// SmartDNSSigningPayload is what the org key signs. Config is hashed compacted:
+// the connector keeps the envelope in an indented JSON state file, and
+// re-encoding changes its whitespace, never its meaning.
 func SmartDNSSigningPayload(s SignedSmartDNS) []byte {
 	h := sha256.New()
 	writeField(h, "ingressd smartdns site v1")
 	writeField(h, s.Connector)
 	writeInt(h, s.Issued.UnixNano())
 	writeField(h, s.Key)
-	sum := sha256.Sum256(s.Config)
+	cfg := s.Config
+	var compact bytes.Buffer
+	if json.Compact(&compact, s.Config) == nil {
+		cfg = compact.Bytes()
+	}
+	sum := sha256.Sum256(cfg)
 	h.Write(sum[:])
 	return h.Sum(nil)
 }
