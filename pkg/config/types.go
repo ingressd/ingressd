@@ -85,6 +85,8 @@ type Edge struct {
 	ACME           ACME      `yaml:"acme"`
 	GeoIP          *GeoIP    `yaml:"geoip"`
 	CrowdSec       *CrowdSec `yaml:"crowdsec"`
+	// Forward is PoP forwarding over the mesh (forward.go).
+	Forward *Forward `yaml:"forward,omitempty"`
 }
 
 // FirewallManaged reports whether ingressd owns the host firewall.
