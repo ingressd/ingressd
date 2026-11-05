@@ -4,6 +4,7 @@ package render
 
 import (
 	"fmt"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -122,21 +123,35 @@ func restrictedTunnelInput(cfg *config.Config) string {
 }
 
 // restrictedOutput keeps the proxy from being used to reach cloud metadata
-// or the mesh (SSRF through an origin address). It matches unprivileged
-// sockets only: the edge runs as its own user, while the control plane
-// (root) uses the mesh itself. TCP only, so host daemons that query
-// link-local NTP or DNS services keep working.
+// or the mesh (SSRF through an origin address), plus the networks in
+// security.edge_output_deny. It matches unprivileged sockets only: the edge
+// runs as its own user, while the control plane (root) uses the mesh
+// itself. TCP only, so host daemons that query link-local NTP or DNS
+// services keep working.
 func restrictedOutput(cfg *config.Config) string {
-	deny := []string{"169.254.0.0/16"}
+	v4 := []string{"169.254.0.0/16"}
+	v6 := []string{"fd00:ec2::254/128"} // AWS IMDS over IPv6
 	if p, ok := cfg.Mesh.MeshPrefix(); ok {
-		deny = append(deny, p.Masked().String())
+		v4 = append(v4, p.Masked().String())
+	}
+	for _, s := range cfg.Security.EdgeOutputDeny {
+		p, err := netip.ParsePrefix(s)
+		if err != nil {
+			continue
+		}
+		if p.Addr().Is4() {
+			v4 = append(v4, p.Masked().String())
+		} else {
+			v6 = append(v6, p.Masked().String())
+		}
 	}
 	return fmt.Sprintf(`
 	chain output {
 		type filter hook output priority filter; policy accept;
 		meta skuid != 0 meta l4proto tcp ip daddr { %s } drop
+		meta skuid != 0 meta l4proto tcp ip6 daddr { %s } drop
 	}
-`, strings.Join(deny, ", "))
+`, strings.Join(v4, ", "), strings.Join(v6, ", "))
 }
 
 func portSet(ports []int) string {

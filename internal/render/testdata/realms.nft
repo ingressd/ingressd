@@ -35,6 +35,7 @@ table inet ingressd {
 	chain output {
 		type filter hook output priority filter; policy accept;
 		meta skuid != 0 meta l4proto tcp ip daddr { 169.254.0.0/16 } drop
+		meta skuid != 0 meta l4proto tcp ip6 daddr { fd00:ec2::254/128 } drop
 	}
 }
 

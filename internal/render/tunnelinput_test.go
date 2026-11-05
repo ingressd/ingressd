@@ -10,7 +10,7 @@ import (
 )
 
 func TestTunnelInputRestrictedGolden(t *testing.T) {
-	cfg, err := config.Parse([]byte(testConfig + "security: { tunnel_input: restricted }\n"))
+	cfg, err := config.Parse([]byte(testConfig + "security: { tunnel_input: restricted, edge_output_deny: [10.10.0.0/16, \"fd12:3456::/48\"] }\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,8 @@ func TestTunnelInputRestrictedGolden(t *testing.T) {
 	if lan := strings.Index(s, `ip daddr 192.168.1.5 meta l4proto`); lan < drop {
 		t.Error("LAN listen rule before the tunnel drop")
 	}
-	if !strings.Contains(s, "meta skuid != 0 meta l4proto tcp ip daddr { 169.254.0.0/16, 10.255.0.0/16 } drop") {
+	if !strings.Contains(s, "meta skuid != 0 meta l4proto tcp ip daddr { 169.254.0.0/16, 10.255.0.0/16 } drop") ||
+		!strings.Contains(s, "meta skuid != 0 meta l4proto tcp ip6 daddr { fd00:ec2::254/128 } drop") {
 		t.Error("output denylist misses metadata or the mesh")
 	}
 }
