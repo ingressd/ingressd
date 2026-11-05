@@ -153,3 +153,46 @@ REST under `/api/v1`, JSON, cookie session (`__Host-` cookie, SameSite=Lax for S
 - `test/fakepanel/` is a minimal panel for exercising managed mode (enrol, snapshots, status, usage, live logs) without the hosted panel.
 
 See [../TESTING.md](../TESTING.md).
+
+---
+
+## 11. Realms (shared nodes)
+
+A panel can merge several organisations onto one node by writing one ordinary `config.yaml` with `realms`. The node does not trust the merge: it re-checks every cross-realm invariant and refuses the config otherwise.
+
+```yaml
+realms:
+  tq7k2m:
+    access: { portal_url: https://auth.ingressd.com/a/tq7k2m, session_key: secret://tq7k2m_session, jwt_key: secret://tq7k2m_jwt }
+    shape: { rate_mbit: 50 }      # validated only; tc shaping comes later
+security: { tunnel_input: restricted }
+tunnels:
+  tq7k2m01: { realm: tq7k2m, table: 1201, virtual_prefix: 10.0.4.0/24, subnets: [192.168.1.0/24], … }
+apps:
+  tq7k2m.nas: { realm: tq7k2m, tunnel: tq7k2m01, origin: http://192.168.1.10:5000, … }
+```
+
+**Names.** Apps, pools, policies, groups and service tokens may carry one namespace label (`tq7k2m.nas`); tunnels stay plain (interface names). Names are still keys of one map, so everything named after them (cookie `__edge_<app>`, rate-limit zones `<app>_<n>`, snapshot directories, pool state) is distinct per realm; `.` is a valid cookie-name character, so cookie names need no rewriting.
+
+**Validation** (`pkg/config/realms.go`). With `realms` present: every tunnel, app, pool, policy, group and service token names an existing realm; app → tunnel/pool/policies, pool → tunnels and policy → groups/service tokens never cross realms; realm tunnels set `virtual_prefix` and an explicit `table`; every origin goes through one of its realm's tunnels at an IP literal inside that tunnel's subnets (no hostnames, no public origins, so never metadata, the mesh or another realm's virtual addresses); an exact hostname belongs to one app, and a wildcard never covers another realm's host at any depth. Refused alongside realms: top-level `access`, `l4`, `edge.admin` (hostname, non-public exposure, allowlist) and `smartdns` (per-realm Smart DNS is a later step). A realm with protected apps must have `access` with `portal_url` and its own `session_key`/`jwt_key`; the block is validated like the top-level one and `portal_host` is refused.
+
+**Stable tables** (`tunnels.<t>.table`, any remapped tunnel). The table doubles as fwmark; tunnels without one keep `1000 + index in sorted name order`. Explicit tables are 1000–1899 (Smart DNS VPN exits own 1900+), unique, and may not land on another tunnel's implicit number. The rule priority is `10000 + (table − 1000)`, so it is stable too and stays below the VPN exits' 10900+.
+
+**Restricted tunnel input** (`security.tunnel_input: restricted`, needs the managed firewall). From any tunnel interface the input chain accepts only the connector control port 51819 from the site to its own edge transit address and Smart DNS (53, relay ports) on that tunnel's own transit address; everything else from a tunnel (80/443, SSH, other local addresses) is dropped before the public ports are opened. An `output` chain drops TCP from unprivileged sockets (the edge runs as user `ingressd`; the control plane, root, uses the mesh itself) to `169.254.0.0/16` and the mesh network, so the proxy cannot be turned into an SSRF to metadata or the mesh. TCP only, so link-local NTP/DNS used by host daemons keeps working. The forward chain is unchanged.
+
+**What is per realm, what is refused**
+
+| Process-global piece | With realms |
+|---|---|
+| Access keys (session/JWT), portal URL, revocations | Per realm: edge_auth of a realm app gets its realm's portal URL and keys; the control plane opens callback codes, applies `revoked_before`/`revoked_sessions` and mints app cookies with the app's realm's keys only |
+| App cookie key | `HKDF(master_realm, "…edge_auth/realm/<realm>/cookie/<app>")`; configs without realms derive exactly as before |
+| Revocation list polled by edge_auth | Per realm (`/v1/revocations?realm=`), one poller per realm |
+| `/.ingressd/callback` | Per app, and so per realm; legacy stored (unsealed) codes are refused |
+| Node portal, portal/play cookies, OTP, email, JWKS, identity providers | Refused: realms sign in on their external portal (`portal_url`); no portal host, no login-to-play (`l4`) |
+| Email-wide remote revocation (`auth_revoke` with email+before) | Refused (it would hit every realm); use the realm's `revoked_before` |
+| Admin hostname, `tunnel_only` trust of every tunnel | Refused |
+| Machine host (managed mode) | An app claiming it fails the render |
+
+Not isolated by design: the bot-challenge clearance key is node-wide (a clearance cookie only proves work was done, and is host-scoped), the shared response cache is keyed by host, and top-level `security` rules, alerts and logging are operator settings. Usage, logs and live tail need no change: app and tunnel keys are already namespaced by the panel.
+
+**Tests**: `go test ./pkg/config ./internal/render ./internal/auth ./pkg/access` and `edge/modules/edgeauth` (realm rules, realm keys in edge_auth, cookie and revocation scoping, two realms on `192.168.1.0/24` dialling distinct virtual prefixes and tables, restricted-input goldens), and `test/netns/realms-e2e.sh` (two connectors with identical LANs and restricted input).
