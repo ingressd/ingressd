@@ -247,6 +247,12 @@ func (c client) get(path string, hdr map[string]string) (*http.Response, string)
 func (c client) do(req *http.Request) (*http.Response, string) {
 	c.t.Helper()
 	resp, err := c.c.Do(req)
+	// Every test reuses port 9381, so the first request can reach the previous
+	// test's server while it shuts down; retry bodiless requests briefly.
+	for deadline := time.Now().Add(3 * time.Second); err != nil && req.Body == nil && time.Now().Before(deadline); {
+		time.Sleep(50 * time.Millisecond)
+		resp, err = c.c.Do(req)
+	}
 	if err != nil {
 		c.t.Fatal(err)
 	}
