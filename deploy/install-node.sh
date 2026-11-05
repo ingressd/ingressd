@@ -85,7 +85,15 @@ say "packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq wireguard-tools nftables git ca-certificates curl iproute2 >/dev/null
-modprobe wireguard 2>/dev/null || echo "warning: could not load the wireguard module (kernel too old?)" >&2
+# In a container modprobe always fails; what matters is whether the kernel
+# (the host's, there) can make a WireGuard interface.
+if ! modprobe wireguard 2>/dev/null; then
+	if ip link add ix-wgprobe type wireguard 2>/dev/null; then
+		ip link del ix-wgprobe
+	else
+		echo "warning: WireGuard is not available (kernel too old, or a container whose host has not loaded the wireguard module)" >&2
+	fi
+fi
 
 # --- Binaries -------------------------------------------------------------------
 WORK=$(mktemp -d)
