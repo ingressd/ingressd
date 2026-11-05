@@ -67,6 +67,10 @@ type Options struct {
 	StatusInterval time.Duration
 	UsageInterval  time.Duration
 	StatusPoll     time.Duration
+	// Metrics timings (defaults 60 s window, 10 s samples, 2 s live).
+	MetricsInterval time.Duration
+	MetricsSample   time.Duration
+	MetricsLive     time.Duration
 	// HTTPClient dials the panel (tests); default has sane timeouts.
 	HTTPClient *http.Client
 	// Upgrade configures remote updates (upgrade.go).
@@ -98,6 +102,11 @@ type Agent struct {
 	storageCalls pendingCalls // storage_request → storage_response (storage.go)
 	upgrading    atomic.Bool  // an upgrade_request is being staged (upgrade.go)
 	replay       replayCache  // signed request nonces / forced snapshots seen (trust.go)
+
+	metrics     *metricsBuffer // node metrics not yet acknowledged (metricsloop.go)
+	mlMu        sync.Mutex
+	ml          *metricsLive
+	metricsWake chan struct{}
 }
 
 // session is one WebSocket connection.
@@ -135,6 +144,15 @@ func New(o Options) (*Agent, error) {
 	if o.StatusPoll <= 0 {
 		o.StatusPoll = 5 * time.Second
 	}
+	if o.MetricsInterval <= 0 {
+		o.MetricsInterval = metricsWindow
+	}
+	if o.MetricsSample <= 0 {
+		o.MetricsSample = metricsSample
+	}
+	if o.MetricsLive <= 0 {
+		o.MetricsLive = metricsLiveEvery
+	}
 	if o.CaddyStorage == "" {
 		o.CaddyStorage = filepath.Join(o.StateDir, "caddy")
 	}
@@ -152,6 +170,9 @@ func New(o Options) (*Agent, error) {
 		detached:  make(chan struct{}),
 		discReqs:  map[string]string{},
 		nudge:     make(chan struct{}, 1),
+
+		metrics:     newMetricsBuffer(time.Now()),
+		metricsWake: make(chan struct{}, 1),
 	}
 	a.upgradeDefaults()
 	return a, nil
@@ -186,9 +207,10 @@ func (a *Agent) Run(ctx context.Context) error {
 		defer func() { a.o.Connectors.OnDiscovery = nil }()
 	}
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(4)
 	go func() { defer wg.Done(); a.snapshotWorker(ctx) }()
 	go func() { defer wg.Done(); a.usageLoop(ctx) }()
+	go func() { defer wg.Done(); a.metricsLoop(ctx) }()
 	go func() { defer wg.Done(); a.watchDetach(ctx) }()
 	defer wg.Wait()
 	defer cancel()
@@ -274,6 +296,7 @@ func (a *Agent) session(ctx context.Context) error {
 	defer func() {
 		scancel()
 		s.live.stopAll()
+		a.stopMetricsLive(s, "")
 		a.mu.Lock()
 		if a.sess == s {
 			a.sess = nil
@@ -313,6 +336,7 @@ func (a *Agent) session(ctx context.Context) error {
 	for _, u := range a.usage.pendingCopy() {
 		_ = a.sendOn(s, nodeproto.TypeUsage, "", u)
 	}
+	a.resendMetrics(s)
 
 	readErr := make(chan error, 1)
 	go func() {
@@ -391,9 +415,9 @@ func (a *Agent) hello() nodeproto.Hello {
 	h := nodeproto.Hello{
 		NodeID: st.NodeID, ProtocolVersion: nodeproto.Version, AgentVersion: version.String(),
 		PublicIPv4: st.PublicIPv4, PublicIPv6: st.PublicIPv6,
-		AppliedRevision: st.AppliedRevision, UsageSeq: a.usage.seq(),
+		AppliedRevision: st.AppliedRevision, UsageSeq: a.usage.seq(), MetricsSeq: a.metrics.lastSeq(),
 		Hostname: st.Hostname, SSHPort: st.SSHPort,
-		Capabilities: append(append([]string{"live", "diag", "discovery", "usage_ack", nodeproto.CapabilityUpgrade, nodeproto.CapabilityAccessIdentity, nodeproto.CapabilityAccessPasskey, nodeproto.CapabilitySmartDNSChecks}, trustCapabilities...), hookCapabilities()...),
+		Capabilities: append(append([]string{"live", "diag", "discovery", "usage_ack", nodeproto.CapabilityUpgrade, nodeproto.CapabilityAccessIdentity, nodeproto.CapabilityAccessPasskey, nodeproto.CapabilitySmartDNSChecks, nodeproto.CapabilityMetrics}, trustCapabilities...), hookCapabilities()...),
 		Install:      a.o.Upgrade.Install, OS: runtime.GOOS, Arch: runtime.GOARCH,
 	}
 	if id, err := secrets.LoadIdentity(a.o.KeyPath); err == nil {
@@ -481,6 +505,21 @@ func (a *Agent) dispatch(s *session, env nodeproto.Envelope) {
 		var u nodeproto.LiveUnsubscribe
 		if env.Decode(&u) == nil {
 			s.live.stop(u.SubscriptionID)
+		}
+	case nodeproto.TypeMetricsSubscribe:
+		var sub nodeproto.MetricsSubscribe
+		if env.Decode(&sub) == nil {
+			a.startMetricsLive(s, sub)
+		}
+	case nodeproto.TypeMetricsUnsubscribe:
+		var u nodeproto.MetricsUnsubscribe
+		if env.Decode(&u) == nil {
+			a.stopMetricsLive(s, u.SubscriptionID)
+		}
+	case nodeproto.TypeMetricsAck:
+		var ack nodeproto.MetricsAck
+		if env.Decode(&ack) == nil {
+			a.metrics.ack(ack.Seq)
 		}
 	case nodeproto.TypeDiagRequest:
 		var req nodeproto.DiagRequest
