@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -22,6 +23,12 @@ const (
 	// MaxVPNExitNameLen is the longest exit name used verbatim in its VPN
 	// interface name (VPNInterfaceName); longer names are hashed.
 	MaxVPNExitNameLen = 10
+	// MaxSmartDNSServiceExits caps a service's exit list.
+	MaxSmartDNSServiceExits = 4
+	// DefaultSmartDNSFailbackAfter and MaxSmartDNSFailbackAfter bound
+	// smartdns.failback_after.
+	DefaultSmartDNSFailbackAfter = 5 * time.Minute
+	MaxSmartDNSFailbackAfter     = time.Hour
 )
 
 // DefaultSmartDNSUpstream resolves names that no service routes.
@@ -50,6 +57,23 @@ func VPNInterfaceName(exit string) string {
 // IsEnabled reports whether a service is enabled (default true).
 func (s SmartDNSService) IsEnabled() bool { return s.Enabled == nil || *s.Enabled }
 
+// ExitList returns the service's exits in order of preference, accepting
+// the single exit form when the config was not normalised by loading.
+func (s SmartDNSService) ExitList() []string {
+	if len(s.Exits) == 0 && s.Exit != "" {
+		return []string{s.Exit}
+	}
+	return s.Exits
+}
+
+// FailbackDuration is FailbackAfter with its default applied.
+func (s *SmartDNS) FailbackDuration() time.Duration {
+	if s == nil || s.FailbackAfter == nil {
+		return DefaultSmartDNSFailbackAfter
+	}
+	return time.Duration(*s.FailbackAfter)
+}
+
 // IsSelf reports whether this node egresses for the exit.
 func (e SmartDNSExit) IsSelf() bool { return e.Node == ExitSelf }
 
@@ -65,6 +89,10 @@ func (c *Config) applySmartDNSDefaults() {
 	for name, svc := range s.Services {
 		for i, d := range svc.Domains {
 			svc.Domains[i] = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(d)), ".")
+		}
+		// Both set is left as is for validation to reject.
+		if svc.Exit != "" && len(svc.Exits) == 0 {
+			svc.Exits, svc.Exit = []string{svc.Exit}, ""
 		}
 		s.Services[name] = svc
 	}
@@ -215,11 +243,7 @@ func (c *Config) validateSmartDNS(v *validator) {
 		if !nameRe.MatchString(name) {
 			v.add(p, "name must match %s", nameRe)
 		}
-		if svc.Exit == "" {
-			v.add(p+".exit", "is required")
-		} else if _, ok := s.Exits[svc.Exit]; !ok {
-			v.add(p+".exit", "unknown exit %q", svc.Exit)
-		}
+		c.validateServiceExits(v, p, svc)
 		if len(svc.Domains) == 0 {
 			v.add(p+".domains", "at least one domain is required")
 		}
@@ -238,6 +262,10 @@ func (c *Config) validateSmartDNS(v *validator) {
 				owners[d] = name
 			}
 		}
+	}
+
+	if f := s.FailbackAfter; f != nil && (*f < 0 || time.Duration(*f) > MaxSmartDNSFailbackAfter) {
+		v.add("smartdns.failback_after", "must be between 0s and %s, got %s", MaxSmartDNSFailbackAfter, time.Duration(*f))
 	}
 
 	for i, c := range s.Checks {
@@ -262,6 +290,45 @@ func (c *Config) validateSmartDNS(v *validator) {
 		}
 		if c.CacheBuster != "" && !checkTokenRe.MatchString(c.CacheBuster) {
 			v.add(p+".cache_buster", "must match %s, got %q", checkTokenRe, c.CacheBuster)
+		}
+	}
+}
+
+// validateServiceExits checks a service's exit list: 1 to 4 known, distinct
+// exits of one country, so failing over never changes where the service
+// appears to be.
+func (c *Config) validateServiceExits(v *validator, p string, svc SmartDNSService) {
+	s := c.SmartDNS
+	if svc.Exit != "" && len(svc.Exits) > 0 {
+		v.add(p, "set exit or exits, not both")
+		return
+	}
+	list := svc.ExitList()
+	switch {
+	case len(list) == 0:
+		v.add(p+".exits", "is required")
+		return
+	case len(list) > MaxSmartDNSServiceExits:
+		v.add(p+".exits", "at most %d exits, got %d", MaxSmartDNSServiceExits, len(list))
+	}
+	seen := map[string]bool{}
+	first := ""
+	for i, name := range list {
+		ep := fmt.Sprintf("%s.exits[%d]", p, i)
+		if seen[name] {
+			v.add(ep, "duplicate exit %q", name)
+			continue
+		}
+		seen[name] = true
+		ex, ok := s.Exits[name]
+		if !ok {
+			v.add(ep, "unknown exit %q", name)
+			continue
+		}
+		if i == 0 {
+			first = ex.Country
+		} else if first != "" && ex.Country != first {
+			v.add(ep, "country %s differs from %s of exits[0]", ex.Country, first)
 		}
 	}
 }

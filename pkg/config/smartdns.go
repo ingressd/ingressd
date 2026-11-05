@@ -23,6 +23,10 @@ type SmartDNS struct {
 	// geolocate viewers themselves (see internal/smartdns/edgecheck.go).
 	// The panel fills them in from its service catalog.
 	Checks []SmartDNSCheck `yaml:"checks"`
+	// FailbackAfter is how long a service's preferred exit must stay
+	// healthy before connections move back to it from a fallback exit
+	// (default 5m, 0 = at once, at most 1h).
+	FailbackAfter *Duration `yaml:"failback_after,omitempty"`
 }
 
 // SmartDNSCheck asks a CDN edge which country it places an exit in: an
@@ -41,7 +45,12 @@ type SmartDNSCheck struct {
 
 type SmartDNSService struct {
 	Domains []string `yaml:"domains"` // suffix match: "example.com" covers "tv.example.com"
-	Exit    string   `yaml:"exit"`
+	// Exit is the single-exit form of Exits, kept for older panels; it is
+	// normalised into Exits when the config is loaded.
+	Exit string `yaml:"exit,omitempty"`
+	// Exits are the service's exits in order of preference (1 to 4, all in
+	// the same country): new connections use the first healthy one.
+	Exits   []string `yaml:"exits,omitempty"`
 	Enabled *bool    `yaml:"enabled"` // default true
 	Catalog string   `yaml:"catalog"` // catalog entry id the domains came from, informational
 }
