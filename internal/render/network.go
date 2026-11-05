@@ -59,5 +59,6 @@ func renderNetwork(cfg *config.Config, keys Keys) (Network, error) {
 		n.Rules = append(n.Rules, Rule{Priority: TunnelRulePriority(id), Mark: id, Table: id})
 		n.NoRPFilter = append(n.NoRPFilter, ifname)
 	}
+	n.Shapes = renderShapes(cfg)
 	return n, nil
 }

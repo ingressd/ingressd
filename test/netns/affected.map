@@ -63,6 +63,7 @@ test/netns/remote-updates-e2e.sh         remote-updates
 test/netns/smartdns-vpn-exits-e2e.sh     smartdns-vpn-exits
 test/netns/smartdns-exit-failover-e2e.sh smartdns-exit-failover
 test/netns/realms-e2e.sh                 realms
+test/netns/realms-shaping-e2e.sh         realms-shaping
 
 # --- Test helpers ---------------------------------------------------------------
 test/netns/sdtool/*               smartdns smartdns-vpn-exits smartdns-exit-failover

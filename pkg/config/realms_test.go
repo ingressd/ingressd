@@ -326,3 +326,16 @@ func TestEdgeOutputDeny(t *testing.T) {
 		}
 	}
 }
+
+func TestRealmIFBName(t *testing.T) {
+	if got := RealmIFBName("tq7k2m"); got != "ifb-tq7k2m" {
+		t.Errorf("RealmIFBName(tq7k2m) = %q", got)
+	}
+	long := RealmIFBName("averylongrealmname")
+	if len(long) > 15 || !strings.HasPrefix(long, "ifb-aver-") || long == RealmIFBName("averylongrealmnamf") {
+		t.Errorf("RealmIFBName(long) = %q", long)
+	}
+	if got := RealmIFBName("abcdefghijk"); got != "ifb-abcdefghijk" || len(got) != 15 {
+		t.Errorf("11-character realm: %q", got)
+	}
+}

@@ -76,6 +76,8 @@ type Network struct {
 	// IPForward enables net.ipv4.ip_forward (kernel-forwarded L4 services).
 	// It is never switched off again, since other software may rely on it.
 	IPForward bool `json:"ip_forward,omitempty"`
+	// Shapes are the realms' bandwidth caps (shape.go).
+	Shapes []Shape `json:"shapes,omitempty"`
 }
 
 type Interface struct {
