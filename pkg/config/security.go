@@ -133,6 +133,9 @@ type Security struct {
 	// networks the proxy may not connect to, e.g. a provider's private
 	// network, to the built-in metadata and mesh denylist.
 	EdgeOutputDeny []string `yaml:"edge_output_deny,omitempty"`
+	// SSHAllow (top-level only, managed firewall) limits edge.ssh_port to these
+	// IPv4/IPv6 networks. Empty leaves SSH open to the internet.
+	SSHAllow []string `yaml:"ssh_allow,omitempty"`
 }
 
 type GeoIP struct {
@@ -292,6 +295,14 @@ func (c *Config) validateSecurity(v *validator) {
 	if len(c.Security.EdgeOutputDeny) > 0 && !c.TunnelInputRestricted() {
 		v.add("security.edge_output_deny", "only applies with tunnel_input: restricted")
 	}
+	for i, s := range c.Security.SSHAllow {
+		if _, err := netip.ParsePrefix(s); err != nil {
+			v.add(fmt.Sprintf("security.ssh_allow[%d]", i), "invalid CIDR %q", s)
+		}
+	}
+	if len(c.Security.SSHAllow) > 0 && !c.Edge.FirewallManaged() {
+		v.add("security.ssh_allow", "needs the managed firewall (edge.manage_firewall)")
+	}
 	if g := c.Edge.GeoIP; g != nil {
 		if g.MaxMindAccountID == "" {
 			v.add("edge.geoip.maxmind_account_id", "is required")
@@ -324,6 +335,9 @@ func (c *Config) validateSecurity(v *validator) {
 			}
 			if len(a.Security.EdgeOutputDeny) > 0 {
 				v.add(p+".security.edge_output_deny", "is node-wide; set it in the top-level security block")
+			}
+			if len(a.Security.SSHAllow) > 0 {
+				v.add(p+".security.ssh_allow", "is node-wide; set it in the top-level security block")
 			}
 		}
 		if w := a.WAF; w != nil {

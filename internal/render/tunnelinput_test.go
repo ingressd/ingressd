@@ -73,3 +73,39 @@ func TestExplicitTunnelTables(t *testing.T) {
 		t.Error("explicit table not used as the fwmark")
 	}
 }
+
+func TestSSHAllow(t *testing.T) {
+	cfg, err := config.Parse([]byte(testConfig + "security: { tunnel_input: restricted, ssh_allow: [203.0.113.7/32, \"2001:db8::/48\"] }\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	nft := renderNFT(cfg, []int{22}, nil)
+	for _, want := range []string{
+		"ip saddr { 203.0.113.7/32 } tcp dport 22 accept\n",
+		"ip6 saddr { 2001:db8::/48 } tcp dport 22 accept\n",
+	} {
+		if !strings.Contains(nft, want) {
+			t.Errorf("missing %q in:\n%s", want, nft)
+		}
+	}
+	if strings.Contains(nft, "tcp dport { 22") || strings.Contains(nft, " 22, ") {
+		t.Errorf("SSH still open to everyone:\n%s", nft)
+	}
+	if drop, ssh := strings.Index(nft, "iifname {"), strings.Index(nft, "ip saddr { 203"); drop < 0 || ssh < drop {
+		t.Errorf("the allowlist must follow the tunnel drop:\n%s", nft)
+	}
+
+	// One family listed: the other has no SSH at all.
+	cfg.Security.SSHAllow = []string{"203.0.113.7/32"}
+	if nft := renderNFT(cfg, nil, nil); strings.Contains(nft, "ip6 saddr") {
+		t.Errorf("IPv6 rule without an IPv6 network:\n%s", nft)
+	}
+
+	cfg.Security.SSHAllow = nil
+	if nft := renderNFT(cfg, nil, nil); !strings.Contains(nft, "tcp dport { 22, ") {
+		t.Errorf("no allowlist must leave SSH open:\n%s", nft)
+	}
+}

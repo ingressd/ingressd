@@ -312,6 +312,22 @@ func TestTunnelInput(t *testing.T) {
 	}
 }
 
+func TestSSHAllow(t *testing.T) {
+	ok := mustParse(t, baseYAML+"security: { ssh_allow: [203.0.113.7/32, \"2001:db8::/48\"] }\n")
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("valid allowlist: %v", err)
+	}
+	if err := mustParse(t, baseYAML+"security: { ssh_allow: [203.0.113.7] }\n").Validate(); err == nil || !strings.Contains(err.Error(), `security.ssh_allow[0]: invalid CIDR "203.0.113.7"`) {
+		t.Errorf("bare address: %v", err)
+	}
+	off := mustParse(t, baseYAML+"security: { ssh_allow: [203.0.113.7/32] }\n")
+	no := false
+	off.Edge.ManageFirewall = &no
+	if err := off.Validate(); err == nil || !strings.Contains(err.Error(), "security.ssh_allow: needs the managed firewall") {
+		t.Errorf("unmanaged firewall: %v", err)
+	}
+}
+
 func TestEdgeOutputDeny(t *testing.T) {
 	ok := mustParse(t, baseYAML+"security: { tunnel_input: restricted, edge_output_deny: [10.1.0.0/16, \"fd12:3456::/48\"] }\n")
 	if err := ok.Validate(); err != nil {

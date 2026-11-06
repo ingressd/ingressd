@@ -75,7 +75,8 @@ type Edge struct {
 	Name       string `yaml:"name"`
 	PublicIPv4 string `yaml:"public_ipv4"`
 	PublicIPv6 string `yaml:"public_ipv6"`
-	// SSHPort is always allowed through the managed firewall. Default 22.
+	// SSHPort stays open through the managed firewall, to the networks in
+	// security.ssh_allow when that is set. Default 22.
 	SSHPort int `yaml:"ssh_port"`
 	// ManageFirewall lets ingressd own the host's nftables input/forward
 	// policy. Default true; set false to manage the firewall yourself.

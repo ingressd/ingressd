@@ -36,6 +36,10 @@ func renderNFT(cfg *config.Config, extraTCP, extraUDP []int) string {
 	if cfg.Edge.FirewallManaged() {
 		tcp := append([]int{cfg.Edge.SSHPort, 80, 443}, l4InputTCP(cfg)...)
 		tcp = append(tcp, extraTCP...)
+		ssh := sshInputRules(cfg)
+		if ssh != "" {
+			tcp = slices.DeleteFunc(tcp, func(p int) bool { return p == cfg.Edge.SSHPort })
+		}
 		udp := append([]int{443}, meshInputUDP(cfg)...)
 		udp = append(udp, extraUDP...)
 		for _, t := range cfg.Tunnels {
@@ -56,7 +60,7 @@ table inet ingressd {
 		ct state invalid drop
 		iifname "lo" accept
 %s		meta l4proto { icmp, ipv6-icmp } accept
-		tcp dport { %s } accept
+%s		tcp dport { %s } accept
 		udp dport { %s } accept
 %s	}
 
@@ -65,7 +69,7 @@ table inet ingressd {
 		ct state established,related accept
 %s	}
 %s}
-`, tunnelRules, portSet(tcp), portSet(udp), rules, l4ForwardRules(cfg), output)
+`, tunnelRules, ssh, portSet(tcp), portSet(udp), rules, l4ForwardRules(cfg), output)
 	}
 
 	var marks, nets []string
@@ -134,7 +138,35 @@ func restrictedOutput(cfg *config.Config) string {
 	if p, ok := cfg.Mesh.MeshPrefix(); ok {
 		v4 = append(v4, p.Masked().String())
 	}
-	for _, s := range cfg.Security.EdgeOutputDeny {
+	deny4, deny6 := splitPrefixes(cfg.Security.EdgeOutputDeny)
+	v4 = append(v4, deny4...)
+	v6 = append(v6, deny6...)
+	return fmt.Sprintf(`
+	chain output {
+		type filter hook output priority filter; policy accept;
+%s		meta skuid != 0 meta l4proto tcp ip daddr { %s } drop
+		meta skuid != 0 meta l4proto tcp ip6 daddr { %s } drop
+	}
+`, forwardOutputRule(cfg), strings.Join(v4, ", "), strings.Join(v6, ", "))
+}
+
+// sshInputRules opens the SSH port to security.ssh_allow only. They follow the
+// restricted tunnel drop, so a listed address cannot arrive through a tunnel.
+func sshInputRules(cfg *config.Config) string {
+	v4, v6 := splitPrefixes(cfg.Security.SSHAllow)
+	var b strings.Builder
+	if len(v4) > 0 {
+		fmt.Fprintf(&b, "\t\tip saddr { %s } tcp dport %d accept\n", strings.Join(v4, ", "), cfg.Edge.SSHPort)
+	}
+	if len(v6) > 0 {
+		fmt.Fprintf(&b, "\t\tip6 saddr { %s } tcp dport %d accept\n", strings.Join(v6, ", "), cfg.Edge.SSHPort)
+	}
+	return b.String()
+}
+
+// splitPrefixes returns validated CIDRs by address family, masked.
+func splitPrefixes(list []string) (v4, v6 []string) {
+	for _, s := range list {
 		p, err := netip.ParsePrefix(s)
 		if err != nil {
 			continue
@@ -145,13 +177,7 @@ func restrictedOutput(cfg *config.Config) string {
 			v6 = append(v6, p.Masked().String())
 		}
 	}
-	return fmt.Sprintf(`
-	chain output {
-		type filter hook output priority filter; policy accept;
-%s		meta skuid != 0 meta l4proto tcp ip daddr { %s } drop
-		meta skuid != 0 meta l4proto tcp ip6 daddr { %s } drop
-	}
-`, forwardOutputRule(cfg), strings.Join(v4, ", "), strings.Join(v6, ", "))
+	return v4, v6
 }
 
 func portSet(ports []int) string {
