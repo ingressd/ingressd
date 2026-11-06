@@ -67,7 +67,10 @@ type edge struct {
 	pollCancel  context.CancelFunc
 	discoverID  string
 	discovering atomic.Bool
-	rtt         ewma // round trip through the tunnel (rtt.go)
+	// keyAuthV1 sends v1 headers to a learned edge not polled yet; it flips
+	// whenever such an edge refuses the version sent.
+	keyAuthV1 atomic.Bool
+	rtt       ewma // round trip through the tunnel (rtt.go)
 }
 
 func newEdge(s *session, key wgtypes.Key, es EdgeState) *edge {
@@ -254,7 +257,7 @@ func (e *edge) tryUDP(ctx context.Context) bool {
 // authHeader authenticates one request (method, URL path, body) to the
 // edge's public endpoints: the enrolment credential, else a IngressdKey
 // header from the site's WireGuard key, bound to the request (v2) when the
-// edge's config says it accepts that, else v1 (an edge from before v2).
+// edge accepts that, else v1 (an edge from before v2).
 func (e *edge) authHeader(method, path string, body []byte) string {
 	c := e.config()
 	if c.Credential != "" {
@@ -262,7 +265,7 @@ func (e *edge) authHeader(method, path string, body []byte) string {
 	}
 	var h string
 	var err error
-	if c.Config.KeyAuth >= proto.KeyAuthV2 {
+	if e.keyAuthVersion(c) >= proto.KeyAuthV2 {
 		h, err = proto.KeyAuthRequest(c.Config.Tunnel, e.s.priv[:], e.key[:], time.Now(), method, path, body)
 	} else {
 		h, err = proto.KeyAuth(c.Config.Tunnel, e.s.priv[:], e.key[:], time.Now())
@@ -271,6 +274,38 @@ func (e *edge) authHeader(method, path string, body []byte) string {
 		return ""
 	}
 	return h
+}
+
+// keyAuthVersion is the header version to send: what the edge's config
+// advertises, and v2 first for a learned edge whose config is not known yet.
+func (e *edge) keyAuthVersion(c EdgeState) int {
+	if c.Config.KeyAuth >= proto.KeyAuthV2 {
+		return proto.KeyAuthV2
+	}
+	if c.Learned && c.LastSeen.IsZero() && !e.keyAuthV1.Load() {
+		return proto.KeyAuthV2
+	}
+	return 1
+}
+
+// authRejected notes that the edge answered 401 to header h, so a learned
+// edge that may predate v2 gets the other version next. It keeps alternating
+// because a new edge also answers 401 until it learns this connector's key.
+func (e *edge) authRejected(h string) {
+	c := e.config()
+	if c.Credential != "" || c.Config.KeyAuth >= proto.KeyAuthV2 || !c.Learned || !c.LastSeen.IsZero() {
+		return
+	}
+	if proto.KeyAuthVersion(h) == e.keyAuthVersion(c) {
+		e.keyAuthV1.Store(!e.keyAuthV1.Load())
+	}
+}
+
+// relaySource reports whether a datagram from addr came from this link's
+// WireGuard socket.
+func (e *edge) relaySource(addr netip.AddrPort) bool {
+	p, err := e.s.link.ListenPort()
+	return err != nil || p == 0 || p == int(addr.Port())
 }
 
 // tryWS connects the WebSocket relay and moves the peer onto it.
@@ -284,9 +319,13 @@ func (e *edge) tryWS(ctx context.Context) *wsRelay {
 		wsPath = u.Path
 	}
 	dctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	relay, err := dialRelay(dctx, cfg.WSURL, e.ws, http.Header{"Authorization": {e.authHeader(http.MethodGet, wsPath, nil)}})
+	auth := e.authHeader(http.MethodGet, wsPath, nil)
+	relay, err := dialRelay(dctx, cfg.WSURL, e.ws, http.Header{"Authorization": {auth}}, e.relaySource)
 	cancel()
 	if err != nil {
+		if errors.Is(err, errRelayUnauthorized) {
+			e.authRejected(auth)
+		}
 		e.s.log.Warn("WebSocket fallback failed", "edge", e.label(), "url", cfg.WSURL, "err", err)
 		return nil
 	}
@@ -557,6 +596,7 @@ func (e *edge) pollOnce(ctx context.Context) error {
 		return nil
 	case http.StatusOK:
 	case http.StatusUnauthorized:
+		e.authRejected(resp.Request.Header.Get("Authorization"))
 		if c.Credential != "" {
 			return errors.New("the edge rejected this connector's credential (re-enroll with a new token)")
 		}
@@ -570,7 +610,7 @@ func (e *edge) pollOnce(ctx context.Context) error {
 		return fmt.Errorf("poll: %s: %s", resp.Status, strings.TrimSpace(string(msg)))
 	}
 	var tc proto.TunnelConfig
-	if err := json.NewDecoder(resp.Body).Decode(&tc); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxConfigBody)).Decode(&tc); err != nil {
 		return fmt.Errorf("poll: %w", err)
 	}
 	if tc.EdgePublicKey != "" && tc.EdgePublicKey != e.key.String() {
@@ -602,8 +642,7 @@ func (e *edge) pollOnce(ctx context.Context) error {
 			return nil
 		}
 	}
-	e.s.applyEdgeConfig(e, tc)
-	return nil
+	return e.s.applyEdgeConfig(e, tc)
 }
 
 // reportLoop sends health reports every 30 s and on transport changes.
@@ -625,7 +664,7 @@ func (e *edge) reportLoop(ctx context.Context) {
 			RxBytes: p.RxBytes, TxBytes: p.TxBytes, Discovery: e.s.discover,
 			OS: runtime.GOOS, Arch: runtime.GOARCH, Install: e.s.upd.install, Update: e.s.upd.snapshot(),
 		}
-		h.Reachability = testReachability(ctx, e.s.stateCopy().Targets())
+		h.Reachability = testReachability(ctx, e.s.stateCopy().reachTargets())
 		h.Edges = e.s.edgeReports()
 		if sd := e.s.r.sd; sd != nil {
 			h.SmartDNS = sd.report()

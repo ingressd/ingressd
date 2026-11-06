@@ -5,8 +5,34 @@ package client
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
+
+// A new directory that already exists is made private before the state
+// moves into it.
+func TestMigrateStateIntoExistingDirectory(t *testing.T) {
+	root := t.TempDir()
+	oldDir, newDir := filepath.Join(root, legacyServiceName), filepath.Join(root, ServiceName)
+	for _, d := range []string{oldDir, newDir} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(oldDir, "connector.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(newDir, "connector.json")
+	if got := MigrateState(path); got != path {
+		t.Fatalf("got %s", got)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(newDir); err != nil || (runtime.GOOS != "windows" && fi.Mode().Perm()&0o077 != 0) {
+		t.Errorf("%v %v", fi.Mode(), err)
+	}
+}
 
 func TestMigrateState(t *testing.T) {
 	root := t.TempDir()

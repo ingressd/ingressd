@@ -12,7 +12,12 @@ import (
 
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
+	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
+
+func tcpID(a netip.Addr) stack.TransportEndpointID {
+	return stack.TransportEndpointID{LocalAddress: tcpip.AddrFromSlice(a.AsSlice()), LocalPort: 80}
+}
 
 // TestNetstackDial checks that a TCP dial through the netstack emits a SYN
 // on the device and that an injected RST completes the dial with an error.

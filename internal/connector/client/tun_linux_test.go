@@ -19,6 +19,10 @@ func TestParseTransparent(t *testing.T) {
 			t.Errorf("%q accepted", bad)
 		}
 	}
+	got, err = parseTransparent([]string{"bad", "udp/192.168.0.18:30120"})
+	if err == nil || len(got) != 1 || got[0].proto != 17 {
+		t.Errorf("mixed list: %+v, %v", got, err)
+	}
 }
 
 func TestNFTScript(t *testing.T) {
@@ -30,7 +34,7 @@ func TestNFTScript(t *testing.T) {
 	for _, want := range []string{
 		"add table ip ingressd_connector\ndelete table ip ingressd_connector\n",
 		`oifname "ingressd0" tcp flags syn tcp option maxseg size > 1240 tcp option maxseg size set 1240`,
-		`ip saddr { 10.100.1.0/24, 100.64.0.8/30 } oifname != "ingressd0" masquerade`,
+		`ip saddr { 10.100.1.0/30, 100.64.0.8/30 } oifname != "ingressd0" masquerade`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("script lacks %q:\n%s", want, s)
@@ -38,5 +42,41 @@ func TestNFTScript(t *testing.T) {
 	}
 	if s := nftScript("ingressd0", &State{}, 1420); strings.Contains(s, "masquerade") {
 		t.Error("masquerade without --masquerade")
+	}
+}
+
+func TestNFTTunnelFilter(t *testing.T) {
+	st := &State{Edges: []EdgeState{{Config: proto.TunnelConfig{
+		Subnets:     []string{"192.168.1.0/24", "192.168.1.5/32", "10.0.0.9/32", "fd00::/64"},
+		Transparent: []string{"tcp/172.16.0.4:25565"},
+	}}}}
+	s := nftScript("ingressd0", st, 1420)
+	set := "ip daddr != { 192.168.1.0/24, 10.0.0.9/32, 172.16.0.4/32 }"
+	for _, want := range []string{
+		`iifname "ingressd0" ` + set + " drop",
+		`iifname "ingressd0" ip protocol != icmp ct state new ` + set + " drop",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("script lacks %q:\n%s", want, s)
+		}
+	}
+	if strings.Index(s, "drop") > strings.Index(s, "maxseg") {
+		t.Errorf("filter after the MSS rules:\n%s", s)
+	}
+
+	// A site with nothing to reach forwards nothing.
+	s = nftScript("ingressd0", &State{}, 1420)
+	if !strings.Contains(s, "\t\tiifname \"ingressd0\" drop\n") || !strings.Contains(s, `ip protocol != icmp ct state new drop`) {
+		t.Errorf("empty site:\n%s", s)
+	}
+
+	// A subnet of everything leaves nothing to filter.
+	st.Edges[0].Config.Subnets = []string{"0.0.0.0/0"}
+	if s = nftScript("ingressd0", st, 1420); strings.Contains(s, "drop") {
+		t.Errorf("default route:\n%s", s)
+	}
+
+	if s = nftRules("ingressd0", &State{Masquerade: true, Edges: []EdgeState{{Config: proto.TunnelConfig{Address: "100.64.0.6/30"}}}}, 1420, false); strings.Contains(s, "drop") || !strings.Contains(s, "masquerade") {
+		t.Errorf("without the filter:\n%s", s)
 	}
 }

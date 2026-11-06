@@ -138,6 +138,9 @@ func (r *Runner) runOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	for i := range st.Edges {
+		sanitizeConfig(&st.Edges[i].Config, r.Log)
+	}
 	s := &session{
 		r: r, st: st, log: r.Log, mode: cmp.Or(r.Mode, st.Mode, ModeNetstack),
 		edges: map[wgtypes.Key]*edge{}, gone: map[string]bool{}, restartEdge: map[string]bool{},
@@ -297,7 +300,7 @@ func (s *session) reconcile(ctx context.Context) {
 	// Addresses: add every wanted one, remove the ones no edge uses.
 	inUse := map[netip.Prefix]bool{}
 	for _, k := range order {
-		if p, err := netip.ParsePrefix(want[k].Config.Address); err == nil {
+		if p, ok := transitPrefix(want[k].Config.Address); ok {
 			inUse[p] = true
 			if err := s.link.AddAddress(p); err != nil {
 				s.log.Warn("add transit address", "address", p, "err", err)
@@ -305,7 +308,7 @@ func (s *session) reconcile(ctx context.Context) {
 		}
 	}
 	for _, e := range stop {
-		if p, err := netip.ParsePrefix(e.config().Config.Address); err == nil && !inUse[p] {
+		if p, ok := transitPrefix(e.config().Config.Address); ok && !inUse[p] {
 			_ = s.link.RemoveAddress(p)
 		}
 	}
@@ -343,7 +346,7 @@ func mergeSiblings(st *State, gone map[string]bool, now time.Time) bool {
 		fresh := isFresh(es)
 		anyFresh = anyFresh || fresh
 		for _, sb := range es.Config.Siblings {
-			if _, err := wgtypes.ParseKey(sb.EdgePublicKey); err != nil || sb.Endpoint == "" || sb.Address == "" {
+			if _, err := wgtypes.ParseKey(sb.EdgePublicKey); err != nil || sb.Endpoint == "" || !privateTransit(sb.Address) {
 				continue
 			}
 			if _, ok := listed[sb.EdgePublicKey]; !ok || fresh {
@@ -441,13 +444,19 @@ func sharedSettings(st *State) string {
 
 // applyEdgeConfig stores a polled config for an edge. A change to the
 // shared settings restarts the link, a change to the edge's peer restarts
-// that edge, and new siblings are picked up at once.
-func (s *session) applyEdgeConfig(e *edge, tc proto.TunnelConfig) {
+// that edge, and new siblings are picked up at once. A config that could
+// not run is refused and never saved.
+func (s *session) applyEdgeConfig(e *edge, tc proto.TunnelConfig) error {
+	sanitizeConfig(&tc, s.log)
 	s.mu.Lock()
 	es := s.st.Edge(e.key.String())
 	if es == nil {
 		s.mu.Unlock()
-		return
+		return nil
+	}
+	if err := checkConfig(tc, es.Config); err != nil {
+		s.mu.Unlock()
+		return fmt.Errorf("config refused: %w", err)
 	}
 	before := sharedSettings(s.st)
 	old := es.Config
@@ -468,7 +477,7 @@ func (s *session) applyEdgeConfig(e *edge, tc proto.TunnelConfig) {
 	if before != after {
 		s.log.Info("shared tunnel settings changed", "edge", e.label(), "revision", tc.Revision)
 		s.restart(errRestart)
-		return
+		return nil
 	}
 	if s.r.sd != nil && !bytes.Equal(old.SmartDNS, tc.SmartDNS) {
 		go s.r.sd.update()
@@ -477,6 +486,7 @@ func (s *session) applyEdgeConfig(e *edge, tc proto.TunnelConfig) {
 		s.log.Info("tunnel config updated", "edge", e.label(), "revision", tc.Revision, "siblings", len(tc.Siblings))
 	}
 	s.triggerRefresh()
+	return nil
 }
 
 // markSeen records a successful poll without a config change.
@@ -519,7 +529,7 @@ func (s *session) transparent() bool {
 // owner of transparent replies.
 func (s *session) allowedIPs(e *edge) []netip.Prefix {
 	var out []netip.Prefix
-	if p, err := netip.ParsePrefix(e.config().Config.Address); err == nil {
+	if p, ok := transitPrefix(e.config().Config.Address); ok {
 		out = append(out, p.Masked())
 	}
 	if s.transparent() {
@@ -707,7 +717,7 @@ func testReachability(ctx context.Context, targets []string) []proto.Reach {
 			c, err := d.DialContext(ctx, "tcp", t)
 			out[i] = proto.Reach{Target: t, OK: err == nil}
 			if err != nil {
-				out[i].Error = err.Error()
+				out[i].Error = "unreachable"
 				return
 			}
 			out[i].Latency = time.Since(start)

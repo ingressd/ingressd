@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"strings"
 	"time"
 
@@ -31,6 +32,10 @@ const (
 	rescueEvery   = time.Minute
 	rescueTimeout = 15 * time.Second
 )
+
+// panelClient asks the panel for edges. An edge names the panel, so a reply
+// from there is not followed anywhere else.
+var panelClient = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
 // rescueDue tracks isolation and reports whether to ask the panel now.
 func (s *session) rescueDue(up bool, now time.Time) bool {
@@ -83,6 +88,9 @@ func (s *session) rescue(ctx context.Context) error {
 	if panel == "" {
 		return errors.New("no panel known (no edge has told this connector its address)")
 	}
+	if u, err := url.Parse(panel); err != nil || u.Scheme != "https" || u.Host == "" {
+		return fmt.Errorf("panel address %q is not an https URL", panel)
+	}
 	id, err := age.ParseX25519Identity(st.AgeIdentity)
 	if err != nil {
 		return fmt.Errorf("age identity: %w", err)
@@ -96,7 +104,7 @@ func (s *session) rescue(ctx context.Context) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := panelClient.Do(req)
 	if err != nil {
 		return err
 	}

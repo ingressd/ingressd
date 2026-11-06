@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -46,6 +47,12 @@ type EnrollOptions struct {
 func Enroll(ctx context.Context, statePath string, o EnrollOptions) (*State, error) {
 	if o.Mode != ModeTUN && o.Mode != ModeNetstack {
 		return nil, fmt.Errorf("mode must be tun or netstack, got %q", o.Mode)
+	}
+	if runtime.GOOS == "windows" {
+		// %ProgramData% lets any user create the directory first.
+		if err := SecureStateDir(statePath); err != nil {
+			return nil, fmt.Errorf("state directory: %w", err)
+		}
 	}
 	key, err := wgtypes.GeneratePrivateKey()
 	if err != nil {
@@ -118,7 +125,7 @@ func enrollWith(ctx context.Context, es EdgeState, token string, key wgtypes.Key
 		return nil, fmt.Errorf("enroll: %s: %s", resp.Status, strings.TrimSpace(string(msg)))
 	}
 	var er proto.EnrollResponse
-	if err := json.NewDecoder(resp.Body).Decode(&er); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxConfigBody)).Decode(&er); err != nil {
 		return nil, fmt.Errorf("enroll: bad response: %w", err)
 	}
 	return &er, nil

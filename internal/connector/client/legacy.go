@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/ingressd/ingressd/internal/upgrade"
 )
 
 // Pre-rename names. A connector installed before the rename keeps its
@@ -46,10 +48,12 @@ func MigrateState(path string) string {
 		return path
 	}
 	oldDir, newDir := filepath.Dir(old), filepath.Dir(path)
+	_ = upgrade.SecureDir(oldDir)
 	if err := os.Rename(oldDir, newDir); err == nil {
 		return path
 	}
-	if err := os.MkdirAll(newDir, 0o700); err != nil {
+	// The new directory may already exist, made by someone else.
+	if err := upgrade.SecureDir(newDir); err != nil {
 		return old
 	}
 	ents, err := os.ReadDir(oldDir)

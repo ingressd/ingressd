@@ -33,6 +33,7 @@ func (l *fakeLink) AddAddress(netip.Prefix) error    { return nil }
 func (l *fakeLink) RemoveAddress(netip.Prefix) error { return nil }
 func (l *fakeLink) SetMTU(int) error                 { return nil }
 func (l *fakeLink) MTU() int                         { return 1420 }
+func (l *fakeLink) ListenPort() (int, error)         { return 0, nil }
 func (l *fakeLink) Kind() string                     { return "fake" }
 func (l *fakeLink) Close() error                     { return nil }
 func (l *fakeLink) Stats() (map[wgtypes.Key]peerStats, error) {

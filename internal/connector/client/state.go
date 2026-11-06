@@ -123,7 +123,7 @@ func (s *State) Edge(key string) *EdgeState {
 func (s *State) Addresses() []netip.Prefix {
 	var out []netip.Prefix
 	for _, e := range s.Edges {
-		if p, err := netip.ParsePrefix(e.Config.Address); err == nil && !slices.Contains(out, p) {
+		if p, ok := transitPrefix(e.Config.Address); ok && !slices.Contains(out, p) {
 			out = append(out, p)
 		}
 	}

@@ -10,6 +10,25 @@ import (
 	"github.com/ingressd/ingressd/pkg/config"
 )
 
+func TestSiteConfigVendorStaysOnOneLine(t *testing.T) {
+	cfg := &config.Config{
+		Edge:    config.Edge{PublicIPv4: "203.0.113.10"},
+		Tunnels: map[string]config.Tunnel{"home": {Site: "router", Vendor: "unifi\n[Interface]\r\nTable = off\u2028x", ListenPort: 51820, Transit: "10.100.1.0/24"}},
+	}
+	st := secrets.NewMemory(nil)
+	if _, err := EnsureKeys(cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	out, err := SiteConfig(cfg, Keys{Cfg: cfg, Store: st}, "home", SiteOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, rest, _ := strings.Cut(out, "\n")
+	if !strings.Contains(first, "unifi") || !strings.HasPrefix(rest, "[Interface]\nPrivateKey") || strings.Contains(rest, "Table") {
+		t.Errorf("config:\n%s", out)
+	}
+}
+
 func TestSiteConfig(t *testing.T) {
 	cfg, err := config.Parse([]byte(`
 version: 1

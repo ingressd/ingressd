@@ -105,6 +105,14 @@ func (l *kernelLink) SetMTU(mtu int) error {
 	return nil
 }
 
+func (l *kernelLink) ListenPort() (int, error) {
+	d, err := l.c.Device(l.name)
+	if err != nil {
+		return 0, err
+	}
+	return d.ListenPort, nil
+}
+
 func (l *kernelLink) MTU() int     { return l.mtu }
 func (l *kernelLink) Kind() string { return "kernel" }
 
@@ -220,7 +228,7 @@ func configureInterface(name string, st *State, log *slog.Logger) (func(), error
 	var rules []*netlink.Rule
 	srcs, err := parseTransparent(st.Transparent())
 	if err != nil {
-		return nil, err
+		log.Warn("ignoring invalid transparent sources", "err", err)
 	}
 	if len(srcs) > 0 {
 		if err := netlink.RouteReplace(&netlink.Route{LinkIndex: lk.Attrs().Index, Dst: &net.IPNet{IP: net.IPv4zero, Mask: net.CIDRMask(0, 32)}, Table: transparentTable}); err != nil {
@@ -240,7 +248,7 @@ func configureInterface(name string, st *State, log *slog.Logger) (func(), error
 		rules = append(rules, r)
 	}
 
-	nftOK := applyNFT(nftScript(name, st, st.MTU()), log)
+	nftOK := applyNFT(name, st, st.MTU(), log)
 	return func() {
 		for _, r := range rules {
 			_ = netlink.RuleDel(r)
@@ -257,27 +265,24 @@ type transparentSrc struct {
 	addr  netip.AddrPort
 }
 
-// parseTransparent parses "tcp/192.168.0.17:25565" entries.
+// parseTransparent parses "tcp/192.168.0.17:25565" entries, returning the
+// valid ones and an error naming the rest.
 func parseTransparent(in []string) ([]transparentSrc, error) {
 	var out []transparentSrc
+	var errs []error
 	for _, s := range in {
-		p, a, ok := strings.Cut(s, "/")
-		ap, err := netip.ParseAddrPort(a)
-		if !ok || err != nil || !ap.Addr().Is4() {
-			return nil, fmt.Errorf("transparent source %q: want tcp/IPv4:port or udp/IPv4:port", s)
+		ap, ok := transparentAddr(s)
+		if !ok {
+			errs = append(errs, fmt.Errorf("transparent source %q: want tcp/IPv4:port or udp/IPv4:port", s))
+			continue
 		}
-		t := transparentSrc{raw: s, addr: ap}
-		switch p {
-		case "tcp":
-			t.proto = unix.IPPROTO_TCP
-		case "udp":
+		t := transparentSrc{raw: s, addr: ap, proto: unix.IPPROTO_TCP}
+		if strings.HasPrefix(s, "udp/") {
 			t.proto = unix.IPPROTO_UDP
-		default:
-			return nil, fmt.Errorf("transparent source %q: protocol must be tcp or udp", s)
 		}
 		out = append(out, t)
 	}
-	return out, nil
+	return out, errors.Join(errs...)
 }
 
 // dropLegacyTable removes the table a pre-rename connector left behind.
@@ -287,15 +292,49 @@ const dropLegacyTable = "add table ip homeedge_connector # legacy homeedge name,
 // nftScript clamps TCP MSS to the tunnel MTU in both directions (the edge
 // and the LAN hosts both assume larger MTUs) and optionally masquerades
 // tunnel traffic so LAN hosts reply to this host when it is not their router.
+// Traffic arriving from the tunnel may only go to the site's destinations.
 func nftScript(ifname string, st *State, mtu int) string {
+	return nftRules(ifname, st, mtu, true)
+}
+
+// tunnelFilter returns the condition matching destinations outside the
+// site's ("" when it has none); ok is false when they cover everything.
+func tunnelFilter(st *State) (cond string, ok bool) {
+	var nets []string
+	for _, p := range st.forwardPrefixes() {
+		if !p.Addr().Is4() {
+			continue
+		}
+		if p.Bits() == 0 {
+			return "", false
+		}
+		nets = append(nets, p.String())
+	}
+	if len(nets) == 0 {
+		return "", true
+	}
+	return " ip daddr != { " + strings.Join(nets, ", ") + " }", true
+}
+
+func nftRules(ifname string, st *State, mtu int, filter bool) string {
 	mss := strconv.Itoa(mtu - 40)
+	cond, ok := tunnelFilter(st)
+	filter = filter && ok
 	var b strings.Builder
 	b.WriteString(dropLegacyTable)
 	b.WriteString("add table ip ingressd_connector\ndelete table ip ingressd_connector\n")
 	fmt.Fprintf(&b, "table ip ingressd_connector {\n\tchain forward {\n\t\ttype filter hook forward priority mangle; policy accept;\n")
+	if filter {
+		fmt.Fprintf(&b, "\t\tiifname %q%s drop\n", ifname, cond)
+	}
 	fmt.Fprintf(&b, "\t\tiifname %q tcp flags syn tcp option maxseg size > %s tcp option maxseg size set %s\n", ifname, mss, mss)
 	fmt.Fprintf(&b, "\t\toifname %q tcp flags syn tcp option maxseg size > %s tcp option maxseg size set %s\n", ifname, mss, mss)
 	b.WriteString("\t}\n")
+	if filter {
+		// Replies to what this host opened through the tunnel still arrive,
+		// and the edge can still ping the site address.
+		fmt.Fprintf(&b, "\tchain input {\n\t\ttype filter hook input priority mangle; policy accept;\n\t\tiifname %q ip protocol != icmp ct state new%s drop\n\t}\n", ifname, cond)
+	}
 	if st.Masquerade {
 		var nets []string
 		for _, p := range st.Addresses() {
@@ -319,12 +358,17 @@ func runNFT(script string) error {
 	return nil
 }
 
-func applyNFT(script string, log *slog.Logger) bool {
+func applyNFT(ifname string, st *State, mtu int, log *slog.Logger) bool {
 	if _, err := exec.LookPath("nft"); err != nil {
-		log.Warn("nft not installed: skipping MSS clamping and masquerade")
+		log.Warn("nft not installed: skipping MSS clamping, masquerade and the tunnel traffic filter")
 		return false
 	}
-	if err := runNFT(script); err != nil {
+	err := runNFT(nftScript(ifname, st, mtu))
+	if err == nil {
+		return true
+	}
+	log.Warn("nftables setup failed; retrying without the tunnel traffic filter", "err", err)
+	if err := runNFT(nftRules(ifname, st, mtu, false)); err != nil {
 		log.Warn("nftables setup failed", "err", err)
 		return false
 	}
@@ -334,7 +378,7 @@ func applyNFT(script string, log *slog.Logger) bool {
 // reapplyNFT refreshes the MSS clamp after an MTU change.
 func reapplyNFT(st *State, mtu int, log *slog.Logger) {
 	if _, err := exec.LookPath("nft"); err == nil {
-		applyNFT(nftScript(cmp.Or(st.Interface, DefaultInterface), st, mtu), log)
+		applyNFT(cmp.Or(st.Interface, DefaultInterface), st, mtu, log)
 	}
 }
 
