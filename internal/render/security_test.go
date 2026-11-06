@@ -110,7 +110,14 @@ func handlerNames(t *testing.T, caddyJSON, host string) []string {
 	return nil
 }
 
+func useClientNet(t *testing.T) {
+	t.Helper()
+	clientNetKeys = true
+	t.Cleanup(func() { clientNetKeys = false })
+}
+
 func TestSecurityOrder(t *testing.T) {
+	useClientNet(t)
 	s := renderSecurity(t, SecurityOptions{}, nil)
 	got := strings.Join(handlerNames(t, s, "web.example.com"), ",")
 	// Public apps first strip spoofable identity headers (access), then security.
@@ -153,6 +160,7 @@ func TestUnderAttack(t *testing.T) {
 }
 
 func TestProtectedAppFilterOrder(t *testing.T) {
+	useClientNet(t)
 	const cfg = `
 version: 1
 edge: { acme: { ca: internal }, crowdsec: { enabled: true, api_key: secret://cs } }
@@ -213,7 +221,14 @@ func TestRateLimitRequestsClamped(t *testing.T) {
 	}
 }
 
+func TestRateLimitKeysDefaultToClientIP(t *testing.T) {
+	if got := rateLimitKey("ip"); got != "{http.vars.client_ip}" {
+		t.Errorf("rateLimitKey(ip) = %q", got)
+	}
+}
+
 func TestRateLimitKeysUseClientNet(t *testing.T) {
+	useClientNet(t)
 	for k, want := range map[string]string{
 		"ip":      "{http.vars.client_net}",
 		"ip_path": "{http.vars.client_net} {http.request.uri.path}",

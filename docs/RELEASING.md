@@ -16,7 +16,7 @@ Commit message trailers since the previous release set manifest fields:
 | Trailer | Effect |
 |---|---|
 | `Security: yes` | Marks the release as a security release. |
-| `Min-Supported: v1.2.0` | Oldest supported version: older installations are flagged "unsupported" and nodes never install anything below it (the highest value wins). This is the only limit on a forced downgrade, so raise it in every security release to the first version with the fix. |
+| `Min-Supported: v1.2.0` | Oldest supported version: older installations are flagged "unsupported" and nodes never install anything below it (the highest value wins). Raise it to the first fixed version once a security release has soaked, so a rollback stays possible until then. |
 
 ## 2. Pipeline
 
@@ -106,7 +106,7 @@ Then either set `ReleasePublicKey` in `pkg/release/key.go` to the base64 line of
 
 - The job runs in the chosen GitHub environment (`staging` or `production`) and gets that environment's secrets; give `production` required reviewers.
 - It does nothing unless the environment has `DEPLOY_SSH_KEY` and `DEPLOY_HOSTS`; it then **requires** `DEPLOY_KNOWN_HOSTS` (host keys are never trusted on first use).
-- Production refuses pre-releases. Assets are checked against `SHA256SUMS`, and each node verifies `SHA256SUMS.minisig` with the release key in its installed `ingressd` (a node too old for `verify-sums` falls back to the new binary, which only proves as much as the download).
+- Production refuses pre-releases. Assets are checked against `SHA256SUMS`, and each node verifies `SHA256SUMS.minisig` with the release key in its installed `ingressd`.
 - `scripts/deploy-nodes.sh` goes **one node at a time**: detect the architecture, copy `ingressd` and `ingressd-edge`, verify the signature and checksums on the node, swap them into `/usr/local/bin` (keeping `*.old`), restart `ingressd-edge` then `ingressd`, and wait up to 90 s for both units and `ingressd doctor`. On failure it restores the old binaries and **stops the rollout**.
 
 Adding a node:

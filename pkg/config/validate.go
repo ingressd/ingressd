@@ -550,9 +550,8 @@ func validHostname(h string, allowWildcard bool) bool {
 	return true
 }
 
-// servableHostname is validHostname for names the edge serves. Caddy converts
-// every host it matches with idna.ToASCII and refuses the whole config if that
-// fails, which the label syntax alone does not rule out (bad xn-- labels).
+// servableHostname is validHostname for names the edge serves, which must also
+// convert with idna.ToASCII.
 func servableHostname(h string, allowWildcard bool) bool {
 	if !validHostname(h, allowWildcard) {
 		return false

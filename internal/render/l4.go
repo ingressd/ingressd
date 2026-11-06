@@ -219,10 +219,10 @@ func l4CaddyApp(cfg *config.Config) obj {
 		if a, err := netip.ParseAddr(addr); err == nil {
 			addr = Virtual(cfg.Tunnels[s.Target.Tunnel], a).String()
 		}
-		// Access checks live in `table ip`, so a restricted service listens on
-		// IPv4 only; the others stay dual-stack.
+		// Access checks and limits live in `table ip`, so services using them
+		// listen on IPv4.
 		network := "tcp"
-		if s.Restricted() {
+		if s.Restricted() || s.Limits != nil {
 			network = "tcp4"
 		}
 		for _, p := range s.Ports() {

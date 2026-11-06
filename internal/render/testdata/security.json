@@ -339,13 +339,10 @@
                           "handler": "crowdsec"
                         },
                         {
-                          "handler": "edge_client_net"
-                        },
-                        {
                           "handler": "rate_limit",
                           "rate_limits": {
                             "web_0": {
-                              "key": "{http.vars.client_net}",
+                              "key": "{http.vars.client_ip}",
                               "match": [
                                 {
                                   "path": [

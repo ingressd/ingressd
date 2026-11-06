@@ -130,6 +130,18 @@ func ipGeoHandler(s config.Security, so SecurityOptions) obj {
 // IPv6, where one subscriber holds the whole prefix.
 const clientNetVar = "{http.vars.client_net}"
 
+// clientNetKeys renders limits through edge_client_net. It stays off until every
+// supported edge has the module: Caddy resumes its saved config at boot, and a
+// rolled-back binary would refuse a config naming a module it lacks.
+var clientNetKeys = false
+
+func clientAddressKey() string {
+	if clientNetKeys {
+		return clientNetVar
+	}
+	return "{http.vars.client_ip}"
+}
+
 // addressKeyed reports whether a rate limit counts by client address alone,
 // which needs nothing from edge_auth.
 func addressKeyed(r config.RateLimitRule) bool { return r.Key == "ip" || r.Key == "ip_path" }
@@ -138,13 +150,13 @@ func addressKeyed(r config.RateLimitRule) bool { return r.Key == "ip" || r.Key =
 func rateLimitKey(k string) string {
 	switch {
 	case k == "ip_path":
-		return clientNetVar + " {http.request.uri.path}"
+		return clientAddressKey() + " {http.request.uri.path}"
 	case k == "email":
 		return "{http.request.header." + EmailHeader + "}"
 	case strings.HasPrefix(k, "header:"):
 		return "{http.request.header." + strings.TrimPrefix(k, "header:") + "}"
 	default:
-		return clientNetVar
+		return clientAddressKey()
 	}
 }
 
@@ -176,7 +188,7 @@ func rateLimitHandlers(name string, app config.App, keep func(config.RateLimitRu
 		return nil
 	}
 	h := obj{"handler": "rate_limit", "rate_limits": zones}
-	if byAddress {
+	if byAddress && clientNetKeys {
 		return []obj{{"handler": "edge_client_net"}, h}
 	}
 	return []obj{h}
