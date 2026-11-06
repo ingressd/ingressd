@@ -6,9 +6,10 @@
 #            sha256
 #   attest   build provenance (Sigstore) for the binaries in dist/
 #   sign     environment release-signing (MINISIGN_SECRET_KEY): checks the
-#            tarball digest, signs release.json and SHA256SUMS with minisign
-#            and verifies them with the key built into the code; runs no Go
-#            toolchain
+#            tarball digest and signs release.json and SHA256SUMS with
+#            minisign; runs no Go toolchain and nothing from the build
+#   verify   no secrets: checks the signatures with the key built into the
+#            code (releasetool); publish needs it to pass
 #   publish  tags vX.Y.Z and publishes the GitHub release
 #   panel    environment release-publish (PANEL_HOST_*): hands the release
 #            to the hosted panel's download mirror
@@ -88,8 +89,8 @@ jobs:
           MIN_SUPPORTED: ${{ steps.version.outputs.min_supported }}
           NOTES_URL: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}
         run: COMMIT="$(git rev-parse --short HEAD)" ./scripts/build-release.sh dist
-      # The sign job verifies with this binary, so it needs no Go toolchain
-      # and no checkout.
+      # The verify job runs this binary, so it needs no Go toolchain and no
+      # checkout.
       - name: Build releasetool
         run: CGO_ENABLED=0 go build -trimpath -o tools/releasetool ./scripts/releasetool
       - name: Pack
@@ -147,7 +148,10 @@ jobs:
           DIGEST: ${{ needs.build.outputs.digest }}
         run: |
           echo "$DIGEST  $RUNNER_TEMP/in/release-build.tar" | sha256sum -c -
-          tar -xf "$RUNNER_TEMP/in/release-build.tar"
+          tar -xf "$RUNNER_TEMP/in/release-build.tar" dist
+          if [ -n "$(find dist ! -type f ! -type d)" ]; then
+            echo "::error::dist may only contain regular files"; exit 1
+          fi
       # A pinned upstream build, checked against its SHA-256 (verified once
       # against the author's minisign key RWQf6LRC…GFO3): no package manager
       # or mirror runs in the job that holds the signing key.
@@ -162,7 +166,7 @@ jobs:
           tar -xzf "$RUNNER_TEMP/minisign.tar.gz" -C "$RUNNER_TEMP/bin" --strip-components=2 minisign-linux/x86_64/minisign
           echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
       # Without the signature no node, connector or panel accepts the
-      # release; releasetool checks it against pkg/release.ReleasePublicKey.
+      # release; the verify job checks it against pkg/release.ReleasePublicKey.
       - name: Sign release.json and SHA256SUMS
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
@@ -174,8 +178,6 @@ jobs:
           minisign -S -s "$RUNNER_TEMP/minisign.key" -m dist/release.json -x dist/release.json.minisig -t "ingressd $TAG"
           minisign -S -s "$RUNNER_TEMP/minisign.key" -m dist/SHA256SUMS -x dist/SHA256SUMS.minisig -t "ingressd $TAG"
           rm -f "$RUNNER_TEMP/minisign.key"
-          ./tools/releasetool verify --dir dist || {
-            echo "::error::release.json does not verify with pkg/release.ReleasePublicKey: put the public key of MINISIGN_SECRET_KEY there"; exit 1; }
       - if: always()
         run: rm -f "$RUNNER_TEMP/minisign.key"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -185,10 +187,36 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
+  # Runs a binary from the build, so it stays out of the job with the key.
+  verify:
+    name: verify signatures
+    needs: [build, sign]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-build-${{ needs.build.outputs.tag }}
+          path: ${{ runner.temp }}/in
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ needs.build.outputs.tag }}
+          path: dist
+      - name: Check the digest and unpack releasetool
+        env:
+          DIGEST: ${{ needs.build.outputs.digest }}
+        run: |
+          echo "$DIGEST  $RUNNER_TEMP/in/release-build.tar" | sha256sum -c -
+          tar -xf "$RUNNER_TEMP/in/release-build.tar" tools/releasetool
+      - name: Verify with the key built into the code
+        run: |
+          ./tools/releasetool verify --dir dist || {
+            echo "::error::release.json does not verify with pkg/release.ReleasePublicKey: put the public key of MINISIGN_SECRET_KEY there"; exit 1; }
+
   publish:
     name: publish
-    needs: [build, attest, sign]
-    if: ${{ !cancelled() && needs.build.result == 'success' && needs.sign.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.attest.result) }}
+    needs: [build, attest, sign, verify]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.sign.result == 'success' && needs.verify.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.attest.result) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write # tag and GitHub release
