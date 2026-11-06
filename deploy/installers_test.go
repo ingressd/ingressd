@@ -26,6 +26,24 @@ func TestInstallersPinReleaseKey(t *testing.T) {
 	}
 }
 
+// With a verifier that does not come from the download (minisign, or an
+// earlier install), the signature is checked before the new binary first runs.
+func TestInstallersVerifyBeforeRunning(t *testing.T) {
+	for f, calls := range map[string][2]string{
+		"install-node.sh":      {`[ -z "$SIGNED" ] || verify_sums "$SIGNED"`, `"$WORK/ingressd" version`},
+		"install-connector.sh": {`[ -z "$SIG" ] || verify_sig "$SUMS" "$SIG" "$NEW"`, `"$NEW" version`},
+	} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		verify, run := strings.LastIndex(string(b), calls[0]), strings.LastIndex(string(b), calls[1])
+		if verify < 0 || run < 0 || verify > run {
+			t.Errorf("%s: verification at %d, first run at %d", f, verify, run)
+		}
+	}
+}
+
 // install-node.sh embeds the control-plane unit: its sandbox must match
 // deploy/systemd/ingressd.service.
 func TestInstallNodeUnitMatches(t *testing.T) {

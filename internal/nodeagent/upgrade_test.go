@@ -17,11 +17,16 @@ import (
 // signedRelease returns an upgrade_request for version signed with sk.
 func signedRelease(t *testing.T, sk release.SecretKey, version, minSupported string) nodeproto.UpgradeRequest {
 	t.Helper()
+	return signedChannelRelease(t, sk, version, minSupported, "")
+}
+
+func signedChannelRelease(t *testing.T, sk release.SecretKey, version, minSupported, channel string) nodeproto.UpgradeRequest {
+	t.Helper()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "ingressd_linux_amd64"), []byte(version), 0o755); err != nil { //nolint:gosec // G306: stands in for an executable
 		t.Fatal(err)
 	}
-	m, err := release.BuildManifest(dir, release.BuildOptions{Version: version, MinSupported: minSupported})
+	m, err := release.BuildManifest(dir, release.BuildOptions{Version: version, MinSupported: minSupported, Channel: channel})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,6 +83,14 @@ func TestCheckUpgrade(t *testing.T) {
 	if _, err := a.checkUpgrade(forced); err != nil {
 		t.Errorf("forced downgrade: %v", err)
 	}
+	// A rollback needs no latest manifest: the panel omits it when the
+	// target is its own latest release.
+	beta := signedChannelRelease(t, sk, "v0.9.0", "", "beta")
+	beta.Force = true
+	refuse("forced downgrade off the stable channel", a, beta, "only stable releases")
+	if _, err := a.checkUpgrade(signedChannelRelease(t, sk, "v1.1.0", "", "beta")); err != nil {
+		t.Errorf("upgrade on another channel: %v", err)
+	}
 	refuse("container", agent("v1.0.0", release.InstallDocker), signedRelease(t, sk, "v1.1.0", ""), "pulling ghcr.io/ingressd/ingressd-node:1.1.0")
 	refuse("placeholder key", &Agent{o: Options{StateDir: t.TempDir(), Upgrade: UpgradeOptions{PublicKey: release.PlaceholderPublicKey, Version: "v1.0.0", Install: "manual"}}},
 		signedRelease(t, sk, "v1.1.0", ""), "no release signing key")
@@ -91,6 +104,21 @@ func TestCheckUpgrade(t *testing.T) {
 	refuse("below min_supported (latest)", b, old, "below the minimum supported version v1.1.0")
 	old.LatestManifest, old.LatestSignature = "", ""
 	refuse("below min_supported (remembered)", b, old, "below the minimum supported version v1.1.0")
+
+	// An unreadable record does not stop the floor from being learned.
+	c := agent("v1.2.0", release.InstallSystemd)
+	if err := os.MkdirAll(c.o.Upgrade.WorkDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(c.o.Upgrade.WorkDir, minSupportedFile), []byte("garbage\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if floor := c.minSupported(&release.Manifest{MinSupported: "v1.1.0"}); floor != "v1.1.0" {
+		t.Errorf("floor = %q", floor)
+	}
+	if floor := c.minSupported(); floor != "v1.1.0" {
+		t.Errorf("remembered floor = %q", floor)
+	}
 
 	// One update at a time.
 	p := &upgrade.Plan{ID: "upg_busy", To: "v1.1.0", WorkDir: a.o.Upgrade.WorkDir, Created: time.Now()}

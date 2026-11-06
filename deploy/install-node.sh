@@ -1,11 +1,14 @@
 #!/bin/sh
 # Installs (or upgrades) an ingressd node and enrols it with a panel.
 #
-#   curl -fsSL <panel>/install/node.sh | sudo sh -s -- --panel URL --token T [--hostname H]
+#   curl -fsSL <panel>/install/node.sh | sudo sh -s -- --panel URL --token-file FILE [--hostname H]
 #
 # Options:
 #   --panel URL        panel URL (default: the panel that served this script)
-#   --token T          one-time enrolment token from the panel (first install)
+#   --token-file FILE  file holding the one-time enrolment token from the panel
+#                      (first install)
+#   --token T          the token itself (local users can see it in the process
+#                      list while this script runs)
 #   --hostname H       this node's public DNS name, if it has one
 #   --public-ip IP     this node's public IPv4 (default: detected)
 #   --artifacts URL    download binaries from URL instead of <panel>/downloads
@@ -26,11 +29,12 @@ set -eu
 # A panel serving this script replaces __PANEL_URL__ with its own URL.
 DEFAULT_PANEL="__PANEL_URL__"
 case "$DEFAULT_PANEL" in __*) DEFAULT_PANEL="" ;; esac
-PANEL="$DEFAULT_PANEL" TOKEN="" HOSTNAME_ARG="" PUBLIC_IP="" ARTIFACTS="" BIN_DIR="" GUARD=1
+PANEL="$DEFAULT_PANEL" TOKEN="" TOKEN_FILE="" HOSTNAME_ARG="" PUBLIC_IP="" ARTIFACTS="" BIN_DIR="" GUARD=1
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--panel) PANEL=$2; shift 2 ;;
 	--token) TOKEN=$2; shift 2 ;;
+	--token-file) TOKEN_FILE=$2; shift 2 ;;
 	--hostname) HOSTNAME_ARG=$2; shift 2 ;;
 	--public-ip) PUBLIC_IP=$2; shift 2 ;;
 	--artifacts) ARTIFACTS=$2; shift 2 ;;
@@ -45,6 +49,7 @@ say() { printf '==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || die "run as root (sudo sh -s -- ...)"
+[ -z "$TOKEN_FILE" ] || TOKEN=$(cat "$TOKEN_FILE") || die "cannot read $TOKEN_FILE"
 STATE=/var/lib/ingressd
 LEGACY=0
 [ -d /var/lib/homeedge ] && [ ! -L /var/lib/homeedge ] && LEGACY=1 # legacy homeedge name, remove after 2027-01
@@ -54,7 +59,7 @@ ENROLLED=0
 [ -f /var/lib/homeedge/node.json ] && ENROLLED=1 # legacy homeedge name, remove after 2027-01
 if [ $ENROLLED -eq 0 ]; then
 	[ -n "$PANEL" ] || die "--panel is required"
-	[ -n "$TOKEN" ] || die "--token is required"
+	[ -n "$TOKEN" ] || die "--token-file is required"
 fi
 PANEL=${PANEL%/}
 # Binaries and the enrolment token never travel over plain http.
@@ -129,6 +134,7 @@ verify_sums() {
 			die "SHA256SUMS signature verification failed"
 		say "SHA256SUMS signature verified (installed ingressd)"
 	else
+		"$WORK/ingressd" version >/dev/null || die "the downloaded ingressd binary does not run on this machine"
 		INGRESSD_RELEASE_PUBLIC_KEY="$RELEASE_KEY" "$WORK/ingressd" verify-sums "$1/SHA256SUMS" "$1/SHA256SUMS.minisig" >/dev/null ||
 			die "SHA256SUMS signature verification failed"
 		say "SHA256SUMS signature verified by the downloaded ingressd (install minisign for an independent check)"
@@ -169,8 +175,8 @@ else
 	SIGNED=$WORK
 fi
 chmod 0755 "$WORK/ingressd" "$WORK/ingressd-edge"
-"$WORK/ingressd" version >/dev/null || die "the downloaded ingressd binary does not run on this machine"
 [ -z "$SIGNED" ] || verify_sums "$SIGNED"
+"$WORK/ingressd" version >/dev/null || die "the downloaded ingressd binary does not run on this machine"
 
 # --- Migration from the old name ------------------------------------------------
 # A node installed under the old name keeps everything: its services stop, the
@@ -322,7 +328,7 @@ fi
 SSH_PORT=$(ss -Htlnp 2>/dev/null | awk '/"sshd"/ {n=split($4, a, ":"); print a[n]; exit}')
 if [ $ENROLLED -eq 1 ]; then
 	say "already enrolled; keeping the enrolment (ingressd node detach to re-enrol)"
-	[ -z "$TOKEN" ] || echo "note: --token ignored on an enrolled node" >&2
+	[ -z "$TOKEN" ] || echo "note: the enrolment token is ignored on an enrolled node" >&2
 else
 	say "enrolling with $PANEL"
 	# The token goes in on stdin (printf is a shell builtin), never in argv.

@@ -265,7 +265,7 @@ func (s *Service) verifyCode(ctx context.Context, st *state, email, code, ip str
 	if usesPanel(st.cfg) {
 		return s.panelVerify(ctx, st, email, code, ip)
 	}
-	return st.otp.Verify(ctx, email, code)
+	return st.otp.Verify(ctx, email, code, ip)
 }
 
 // Evaluate runs a named policy list for an email from a client IP.

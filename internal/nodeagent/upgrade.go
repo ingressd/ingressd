@@ -108,6 +108,9 @@ func (a *Agent) minSupported(ms ...*release.Manifest) string {
 	path := filepath.Join(a.o.Upgrade.WorkDir, minSupportedFile)
 	b, _ := os.ReadFile(path)
 	floor := strings.TrimSpace(string(b))
+	if _, ok := release.Parse(floor); !ok {
+		floor = ""
+	}
 	changed := false
 	for _, m := range ms {
 		if m == nil || m.MinSupported == "" {
@@ -119,7 +122,7 @@ func (a *Agent) minSupported(ms ...*release.Manifest) string {
 	}
 	if changed {
 		_ = os.MkdirAll(a.o.Upgrade.WorkDir, 0o700)
-		_ = os.WriteFile(path, []byte(floor+"\n"), 0o600) //nolint:gosec // G703: path is built from the configured work dir and a constant name
+		_ = writeFileAtomic(path, []byte(floor+"\n"), 0o600)
 	}
 	return floor
 }
@@ -155,6 +158,8 @@ func (a *Agent) checkUpgrade(req nodeproto.UpgradeRequest) (*release.Manifest, e
 			return nil, fmt.Errorf("already running %s", cur)
 		case c < 0 && !req.Force:
 			return nil, fmt.Errorf("%s is older than the running %s (a downgrade must be forced)", m.Version, cur)
+		case c < 0 && m.Channel != release.ChannelStable:
+			return nil, fmt.Errorf("%s is on the %s channel: only stable releases can be rolled back to", m.Version, m.Channel)
 		}
 	}
 	if upgrade.Pending(u.WorkDir) != nil {
@@ -265,6 +270,7 @@ func (a *Agent) handleConnectorUpdate(s *session, id string, req nodeproto.Conne
 		fail(fmt.Errorf("version %s does not match the signed manifest (%s)", req.Version, m.Version))
 		return
 	}
+	a.minSupported(m)
 	cfg, err := a.loadConfig()
 	if err != nil {
 		fail(err)

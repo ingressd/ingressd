@@ -18,10 +18,10 @@ A self-hosted edge for the home lab: WireGuard tunnels from a public cloud VM ba
 - **Managed**: the node enrols with the hosted ingressd panel and receives signed config snapshots over an outbound WebSocket; it keeps serving its last config while the panel is unreachable. Install and enrol in one line:
 
   ```bash
-  curl -fsSL <panel>/install/node.sh | sudo sh -s -- --panel <panel-url> --token <token> [--hostname node.example.com]
+  curl -fsSL <panel>/install/node.sh | sudo sh -s -- --panel <panel-url> --token-file <file> [--hostname node.example.com]
   ```
 
-  or, on an installed node, `ingressd node enroll --panel URL --token T`. `ingressd node status` shows the connection; `ingressd node detach` returns the node to standalone (config and secrets are kept).
+  where `<file>` holds the enrolment token, or, on an installed node, `ingressd node enroll --panel URL --token-file FILE` (`-` reads stdin). `--token` also works in both, but local users can see it in the process list. `ingressd node status` shows the connection; `ingressd node detach` returns the node to standalone (config and secrets are kept).
 
 ## Layout
 

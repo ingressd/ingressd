@@ -203,6 +203,7 @@ verify_sig() {
 		INGRESSD_RELEASE_PUBLIC_KEY="$RELEASE_KEY" "$EXE" verify-sums "$1" "$2" >/dev/null || die "SHA256SUMS signature verification failed"
 		say "SHA256SUMS signature verified (installed ingressd-connector)"
 	else
+		"$3" version >/dev/null 2>&1 || die "the downloaded binary does not run on this host"
 		INGRESSD_RELEASE_PUBLIC_KEY="$RELEASE_KEY" "$3" verify-sums "$1" "$2" >/dev/null || die "SHA256SUMS signature verification failed"
 		say "SHA256SUMS signature verified by the downloaded binary (install minisign for an independent check)"
 	fi
@@ -233,8 +234,8 @@ else
 	verify "$NEW" "$ASSET" "$SUMS"
 fi
 chmod 0755 "$NEW"
-"$NEW" version >/dev/null 2>&1 || die "the downloaded binary does not run on this host"
 [ -z "$SIG" ] || verify_sig "$SUMS" "$SIG" "$NEW"
+"$NEW" version >/dev/null 2>&1 || die "the downloaded binary does not run on this host"
 
 # ---------------------------------------------------------------- migration
 # A connector installed under the old name: stop its service, move its state

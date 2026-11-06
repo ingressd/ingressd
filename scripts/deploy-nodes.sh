@@ -6,11 +6,15 @@
 #   DEPLOY_HOSTS="..." scripts/deploy-nodes.sh --release-dir DIR --version vX.Y.Z \
 #       [--ssh-key FILE] [--known-hosts FILE] [--only name,name] [--dry-run]
 #
+# Host keys must already be known: from --known-hosts, else the user's own
+# known_hosts. RELEASE_DIR needs SHA256SUMS and SHA256SUMS.minisig.
+#
 # DEPLOY_HOSTS has one node per line: "<name> <user@host> [ssh-port]"; blank
 # lines and "#" comments are ignored. The SSH user needs passwordless sudo.
 #
 # On each node: the binaries for its architecture (uname -m) are copied to a
-# temporary directory and checked against SHA256SUMS, swapped atomically into
+# temporary directory, SHA256SUMS' signature is verified by the ingressd
+# installed there and the binaries are checked against it, swapped atomically into
 # /usr/local/bin (the previous ones kept as *.old), the systemd units are
 # restarted, and the node must pass `ingressd doctor` within the health
 # timeout; otherwise the old binaries are restored and restarted and the
@@ -33,16 +37,13 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n $RELEASE_DIR && -n $VERSION ]] || { echo "usage: $0 --release-dir DIR --version vX.Y.Z [...]" >&2; exit 2; }
 [[ -n ${DEPLOY_HOSTS:-} ]] || { echo "DEPLOY_HOSTS is empty: nothing to deploy" >&2; exit 2; }
-[[ -f $RELEASE_DIR/SHA256SUMS ]] || { echo "$RELEASE_DIR/SHA256SUMS missing" >&2; exit 1; }
+for f in SHA256SUMS SHA256SUMS.minisig; do
+	[[ -f $RELEASE_DIR/$f ]] || { echo "$RELEASE_DIR/$f missing" >&2; exit 1; }
+done
 
-SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15)
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o StrictHostKeyChecking=yes)
 [[ -n $SSH_KEY ]] && SSH_OPTS+=(-i "$SSH_KEY" -o IdentitiesOnly=yes)
-if [[ -n $KNOWN_HOSTS ]]; then
-	SSH_OPTS+=(-o UserKnownHostsFile="$KNOWN_HOSTS" -o StrictHostKeyChecking=yes)
-else
-	echo "::warning::no known_hosts given; trusting host keys on first use"
-	SSH_OPTS+=(-o StrictHostKeyChecking=accept-new)
-fi
+[[ -n $KNOWN_HOSTS ]] && SSH_OPTS+=(-o UserKnownHostsFile="$KNOWN_HOSTS")
 
 # The remote half, run as root with: <dir> <version> <arch> <timeout>.
 # shellcheck disable=SC2016
@@ -54,6 +55,15 @@ cd "$dir"
 doctor_out=$(mktemp)
 trap "rm -f \"\$doctor_out\"" EXIT
 grep -E "  (ingressd|ingressd-edge)_linux_${arch}\$" SHA256SUMS | sha256sum -c -
+# The installed binary holds the release key; one too old to verify leaves
+# the new binary to check itself, as on a first install.
+verifier=/usr/local/bin/ingressd
+if ! "$verifier" verify-sums --help >/dev/null 2>&1; then
+	echo "installed ingressd cannot verify signatures; using the new binary" >&2
+	verifier=./ingressd_linux_${arch}
+	chmod 0755 "$verifier"
+fi
+"$verifier" verify-sums SHA256SUMS SHA256SUMS.minisig
 for b in ingressd ingressd-edge; do
 	[[ -e /usr/local/bin/$b ]] && cp -p "/usr/local/bin/$b" "/usr/local/bin/$b.old"
 	install -m 0755 "${b}_linux_${arch}" "/usr/local/bin/$b.new"
@@ -108,7 +118,7 @@ while read -r name target port _ <&3; do
 		[[ -f $RELEASE_DIR/${b}_linux_$arch ]] || { echo "::error::release has no ${b}_linux_$arch"; exit 1; }
 	done
 	rdir=$("${ssh_[@]}" mktemp -d /tmp/ingressd-deploy.XXXXXX)
-	"${scp_[@]}" "$RELEASE_DIR/ingressd_linux_$arch" "$RELEASE_DIR/ingressd-edge_linux_$arch" "$RELEASE_DIR/SHA256SUMS" "$target:$rdir/"
+	"${scp_[@]}" "$RELEASE_DIR/ingressd_linux_$arch" "$RELEASE_DIR/ingressd-edge_linux_$arch" "$RELEASE_DIR/SHA256SUMS" "$RELEASE_DIR/SHA256SUMS.minisig" "$target:$rdir/"
 	if ! "${ssh_[@]}" sudo bash -s -- "$rdir" "$VERSION" "$arch" "$HEALTH_TIMEOUT" <<<"$REMOTE"; then
 		echo "::error::$name: deployment failed and was rolled back; stopping the rollout"
 		echo "::endgroup::"

@@ -15,8 +15,8 @@
 #                        (default /tmp/ingressd-e2e.lock)
 #   --no-build, E2E_NO_BUILD=1   use the binaries already in $BIN
 #   E2E_TIMEOUT=SECS     per-suite timeout (default 600)
-#   E2E_OUT=DIR          logs (default /tmp/ingressd-e2e/<run id>)
-#   E2E_TMP=DIR          suite temp dirs (default /tmp/ingressd-e2e/<run id>/tmp);
+#   E2E_OUT=DIR          logs (default a new /tmp/ingressd-e2e.XXXXXX)
+#   E2E_TMP=DIR          suite temp dirs (default tmp below that directory);
 #                        every user must be able to enter it (connector-transports runs
 #                        the connector as nobody on files below it)
 #   BIN=DIR              binaries (default ./bin)
@@ -101,24 +101,22 @@ fi
 
 # --- Run ------------------------------------------------------------------------------
 RUN=$(od -An -N2 -tx1 /dev/urandom | tr -d ' \n')
-OUT=${E2E_OUT:-/tmp/ingressd-e2e/$RUN}
+BASE=$(mktemp -d /tmp/ingressd-e2e.XXXXXX) || exit
+chmod 755 "$BASE"
+OUT=${E2E_OUT:-$BASE}
 mkdir -p "$OUT"
 # Suite temp dirs live apart from the logs: $E2E_OUT may sit in a directory
 # other users cannot enter (CI: $RUNNER_TEMP below /home/runner, mode 750),
 # and suites drop privileges on files below their $TMP (connector-transports: nobody).
-TMPBASE=${E2E_TMP:-/tmp/ingressd-e2e/$RUN/tmp}
+TMPBASE=${E2E_TMP:-$BASE/tmp}
 mkdir -p "$TMPBASE"
-if [[ -z ${E2E_TMP:-} ]]; then
-	chmod 755 /tmp/ingressd-e2e "/tmp/ingressd-e2e/$RUN" "$TMPBASE"
-else
-	chmod 755 "$TMPBASE"
-fi
+chmod 755 "$TMPBASE"
 TIMEOUT=${E2E_TIMEOUT:-600}
 REPEAT=${E2E_REPEAT:-1}
 
 # The queue: suite paths, longest first (from the last run's timings) so the
 # slow ones do not start last.
-TIMES=/tmp/ingressd-e2e/times
+TIMES=$BIN/.e2e-times
 QUEUE=()
 for ((r = 1; r <= REPEAT; r++)); do QUEUE+=("${TESTS[@]}"); done
 if [[ -f $TIMES ]]; then
@@ -219,7 +217,8 @@ while [[ $next -lt $total || $running -gt 0 ]]; do
 	[[ -n ${DONE_PID:-} && -n ${PID2IDX[$DONE_PID]:-} ]] && finish_suite "$DONE_PID" "$rc"
 done
 WALL=$(($(date +%s) - T0))
-[[ -z ${E2E_TMP:-} ]] && rmdir "$TMPBASE" "/tmp/ingressd-e2e/$RUN" 2>/dev/null
+[[ -z ${E2E_TMP:-} ]] && rmdir "$TMPBASE" 2>/dev/null
+rmdir "$BASE" 2>/dev/null
 
 # --- Summary ------------------------------------------------------------------------
 {

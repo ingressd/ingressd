@@ -50,13 +50,22 @@ func generateCode(length int) (string, error) {
 	return string(b), nil
 }
 
+// guessKeys are the failure counter and lockout for wrong codes. They are
+// per client address: a code is capped by its own attempts, and how many
+// codes an email can get by the request limits, so failures from one
+// address leave the email usable from others.
+func guessKeys(email, ip string) (fail, lock string) {
+	return "fail:" + ip + ":" + email, "lock:fail:" + ip + ":" + email
+}
+
 // Allow applies the per-email and per-IP rate limits and the resend
 // cooldown to a code request. It must be called for every request, whether
 // or not a code will be sent, so limits behave identically for all emails.
 // send=false (with a nil error) means "within cooldown: don't send again".
 func (o *OTP) Allow(ctx context.Context, email, ip string) (send bool, err error) {
 	s := o.Settings
-	for _, key := range []string{"lock:email:" + email, "lock:ip:" + ip} {
+	_, guessLock := guessKeys(email, ip)
+	for _, key := range []string{"lock:email:" + email, "lock:ip:" + ip, guessLock} {
 		if locked, err := o.Store.Locked(ctx, key); err != nil {
 			return false, err
 		} else if locked {
@@ -110,15 +119,17 @@ func (o *OTP) Issue(ctx context.Context, email, ip string) (string, error) {
 	return code, nil
 }
 
-// Verify checks a code. Wrong guesses count against the code; when the
-// attempts run out the code is burned and the email locked out. Success
-// consumes the code.
-func (o *OTP) Verify(ctx context.Context, email, code string) error {
-	lockKey := "lock:email:" + email
-	if locked, err := o.Store.Locked(ctx, lockKey); err != nil {
-		return err
-	} else if locked {
-		return ErrInvalidCode
+// Verify checks a code from ip. Wrong guesses count against the code; when
+// the attempts run out the code is burned and ip locked out for this email.
+// Success consumes the code.
+func (o *OTP) Verify(ctx context.Context, email, code, ip string) error {
+	failKey, lockKey := guessKeys(email, ip)
+	for _, key := range []string{"lock:email:" + email, lockKey} {
+		if locked, err := o.Store.Locked(ctx, key); err != nil {
+			return err
+		} else if locked {
+			return ErrInvalidCode
+		}
 	}
 	row, err := o.Store.activeOTP(ctx, email)
 	if err != nil {
@@ -127,7 +138,7 @@ func (o *OTP) Verify(ctx context.Context, email, code string) error {
 	if row == nil {
 		// Count guesses against emails without a code too, so they cannot
 		// be told apart, and so guessing cannot continue unchecked.
-		n, err := o.Store.Hit(ctx, "fail:email:"+email, time.Duration(o.Settings.Lockout))
+		n, err := o.Store.Hit(ctx, failKey, time.Duration(o.Settings.Lockout))
 		if err != nil {
 			return err
 		}
@@ -143,7 +154,7 @@ func (o *OTP) Verify(ctx context.Context, email, code string) error {
 		if ok, err := o.Store.useOTP(ctx, row.id); err != nil || !ok {
 			return errors.Join(ErrInvalidCode, err)
 		}
-		_ = o.Store.ClearHits(ctx, "fail:email:"+email)
+		_ = o.Store.ClearHits(ctx, failKey)
 		return nil
 	}
 	burned, err := o.Store.failOTP(ctx, row.id, o.Settings.Attempts)
