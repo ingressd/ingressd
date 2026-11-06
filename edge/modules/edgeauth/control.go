@@ -102,7 +102,7 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) error {
 
 // --- identity assertion ---
 
-// assertion returns a compact ES256 JWT for the origin (aud = app),
+// assertion returns a compact ES256 JWT for the origin (aud = Audience, else App),
 // verifiable against the portal's /.well-known/jwks.json.
 func (h *Handler) assertion(sub, email, sid string, sessionExp time.Time) string {
 	now := time.Now()
@@ -110,9 +110,13 @@ func (h *Handler) assertion(sub, email, sid string, sessionExp time.Time) string
 	if !sessionExp.IsZero() && sessionExp.Before(exp) {
 		exp = sessionExp
 	}
+	aud := h.App
+	if h.Audience != "" {
+		aud = h.Audience
+	}
 	claims := map[string]any{
 		"iss": strings.TrimSuffix(h.PortalURL, "/"),
-		"aud": h.App,
+		"aud": aud,
 		"sub": sub,
 		"iat": now.Unix(),
 		"exp": exp.Unix(),
@@ -156,6 +160,7 @@ var pollers = caddy.NewUsagePool()
 type poller struct {
 	client   *http.Client
 	host     string
+	path     string // the revocation list, with the realm if any
 	interval time.Duration
 	logger   *zap.Logger
 
@@ -170,9 +175,9 @@ type poller struct {
 	synced  atomic.Bool
 }
 
-func startPoller(client *http.Client, host string, interval time.Duration, logger *zap.Logger) *poller {
+func startPoller(client *http.Client, host, path string, interval time.Duration, logger *zap.Logger) *poller {
 	ctx, cancel := context.WithCancel(context.Background())
-	p := &poller{client: client, host: host, interval: interval, logger: logger, cancel: cancel, started: time.Now().Truncate(time.Second)}
+	p := &poller{client: client, host: host, path: path, interval: interval, logger: logger, cancel: cancel, started: time.Now().Truncate(time.Second)}
 	empty := map[string]struct{}{}
 	p.set.Store(&empty)
 	// Fetch once before serving; failures are retried in the background,
@@ -239,7 +244,7 @@ func (p *poller) run(ctx context.Context) {
 }
 
 func (p *poller) fetch(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+p.host+"/v1/revocations", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+p.host+p.path, nil)
 	if err != nil {
 		return err
 	}

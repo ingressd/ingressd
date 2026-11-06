@@ -102,7 +102,7 @@ func (c *Config) validateAdmins(v *validator) {
 			}
 			for kind, names := range s.Kinds() {
 				for j, n := range names {
-					if !nameRe.MatchString(n) {
+					if !qualifiedNameRe.MatchString(n) {
 						v.add(fmt.Sprintf("%s.scope.%s[%d]", p, kind, j), "invalid name %q", n)
 					}
 				}

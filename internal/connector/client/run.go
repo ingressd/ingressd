@@ -3,6 +3,7 @@
 package client
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -60,6 +61,8 @@ type Runner struct {
 	NoDiscovery bool
 
 	upd *updater // self-update state, kept across link restarts (update.go)
+	// sd runs Smart DNS, kept across link restarts (smartdns.go).
+	sd *sdController
 }
 
 // errRestart asks Run to rebuild the link after a config change.
@@ -70,6 +73,9 @@ var errRestart = errors.New("tunnel config changed")
 func (r *Runner) Run(ctx context.Context) error {
 	if r.Log == nil {
 		r.Log = slog.Default()
+	}
+	if r.sd == nil {
+		r.sd = newSDController(ctx, r.StatePath, r.Log)
 	}
 	if err := SecureStateDir(r.StatePath); err != nil {
 		// Not fatal: the upgrade helper refuses plans it cannot trust
@@ -120,6 +126,10 @@ type session struct {
 	mtuMu  sync.Mutex
 	udpMTU int // probed path MTU over UDP (TUN mode), 0 = not yet
 
+	// isolated is when the last tunnel went down, rescued the last time the
+	// panel was asked for edges (rescue.go). Guarded by mu.
+	isolated, rescued time.Time
+
 	statusMu sync.Mutex // serialises status file writes
 }
 
@@ -141,6 +151,15 @@ func (r *Runner) runOnce(ctx context.Context) error {
 	if s.priv, err = wgtypes.ParseKey(st.PrivateKey); err != nil {
 		return fmt.Errorf("state private key: %w", err)
 	}
+	ageID, created, err := ensureAgeIdentity(st)
+	if err != nil {
+		return fmt.Errorf("state age identity: %w", err)
+	}
+	if created {
+		if err := st.Save(r.StatePath); err != nil {
+			return err
+		}
+	}
 	switch s.mode {
 	case ModeTUN:
 		s.link, err = openTUN(st, s.priv, s.log)
@@ -160,6 +179,10 @@ func (r *Runner) runOnce(ctx context.Context) error {
 	defer cancel(nil)
 	s.restart = cancel
 	s.reconcile(ctx)
+	if r.sd != nil {
+		r.sd.attach(s, ageID)
+		defer r.sd.detach(s)
+	}
 	s.manage(ctx)
 	s.mu.Lock()
 	edges := make([]*edge, 0, len(s.edges))
@@ -190,6 +213,7 @@ func (s *session) manage(ctx context.Context) {
 		case <-tick.C:
 			s.updateOwner()
 			s.applyMTU()
+			s.rescueTick(ctx, time.Now())
 			s.writeStatus()
 			s.upd.tick(s.healthy())
 		case <-refresh.C:
@@ -428,6 +452,9 @@ func (s *session) applyEdgeConfig(e *edge, tc proto.TunnelConfig) {
 	before := sharedSettings(s.st)
 	old := es.Config
 	es.Config, es.LastSeen = tc, time.Now().UTC()
+	if tc.Node != "" {
+		es.Node = tc.Node
+	}
 	after := sharedSettings(s.st)
 	if err := s.st.Save(s.r.StatePath); err != nil {
 		s.log.Warn("save state", "err", err)
@@ -442,6 +469,9 @@ func (s *session) applyEdgeConfig(e *edge, tc proto.TunnelConfig) {
 		s.log.Info("shared tunnel settings changed", "edge", e.label(), "revision", tc.Revision)
 		s.restart(errRestart)
 		return
+	}
+	if s.r.sd != nil && !bytes.Equal(old.SmartDNS, tc.SmartDNS) {
+		go s.r.sd.update()
 	}
 	if old.Revision != tc.Revision {
 		s.log.Info("tunnel config updated", "edge", e.label(), "revision", tc.Revision, "siblings", len(tc.Siblings))
@@ -503,24 +533,20 @@ func (s *session) allowedIPs(e *edge) []netip.Prefix {
 	return out
 }
 
-// updateOwner gives 0.0.0.0/0 to the first edge (in state order) that is
-// up, keeping the current owner while it stays up.
+// updateOwner gives 0.0.0.0/0 to the best edge (priority, then RTT) that
+// is up, keeping the current owner while it stays up: moving the route
+// breaks every transparent flow in progress.
 func (s *session) updateOwner() {
 	if !s.transparent() {
 		return
 	}
 	s.mu.Lock()
 	cur := s.edges[s.owner]
-	var order []*edge
-	for _, es := range s.st.Edges {
-		if k, err := wgtypes.ParseKey(es.Config.EdgePublicKey); err == nil && s.edges[k] != nil {
-			order = append(order, s.edges[k])
-		}
-	}
 	s.mu.Unlock()
 	if cur != nil && cur.tunnelUp() {
 		return
 	}
+	order := s.rankedEdges()
 	for _, e := range order {
 		if e.tunnelUp() {
 			s.mu.Lock()
@@ -596,6 +622,7 @@ func (s *session) snapshot() Status {
 		}
 	}
 	tunnel := s.st.Tunnel()
+	info := siblingInfo(s.st)
 	s.mu.Unlock()
 	now := time.Now().UTC()
 	st := Status{
@@ -609,6 +636,7 @@ func (s *session) snapshot() Status {
 	pollOK := false
 	for _, e := range edges {
 		es := e.status(ps[e.key])
+		es.Priority, es.PoP = info[es.EdgePublicKey].Priority, info[es.EdgePublicKey].PoP
 		st.Edges = append(st.Edges, es)
 		if es.LastPoll.After(st.LastPoll) {
 			st.LastPoll = es.LastPoll
@@ -618,9 +646,11 @@ func (s *session) snapshot() Status {
 		}
 	}
 	for i := range st.Edges {
-		if st.Edges[i].Up(now) {
+		if !st.Edges[i].Up(now) {
+			continue
+		}
+		if best == nil || compareRank(statusRank(st.Edges[i]), statusRank(*best)) < 0 {
 			best = &st.Edges[i]
-			break
 		}
 	}
 	if best == nil && len(st.Edges) > 0 {

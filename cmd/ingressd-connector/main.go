@@ -104,7 +104,7 @@ func newRootCmd() *cobra.Command {
 	ef.StringVar(&eo.CAFile, "ca", "", "PEM file with the CA that signed the edge's certificate")
 	ef.BoolVar(&eo.Insecure, "insecure", false, "do not verify the edge's certificate (testing only)")
 	ef.StringVar(&eo.Interface, "interface", "", "TUN-mode interface name (default "+client.DefaultInterface+")")
-	ef.BoolVar(&eo.Masquerade, "masquerade", false, "TUN mode: masquerade tunnel traffic to the LAN (when this host is not the LAN's router)")
+	ef.BoolVar(&eo.Masquerade, "masquerade", true, "TUN mode: masquerade tunnel traffic to the LAN so hosts reply through this machine (set --masquerade=false only when this host is the LAN's router)")
 	ef.BoolVar(&eo.NoDiscovery, "no-discovery", false, "never scan the LAN for services when the edge asks (stored in the state file)")
 
 	r := &client.Runner{}
@@ -175,7 +175,7 @@ func newRootCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), "ingressd-connector", version.String())
 			},
 		},
-		enroll, run, status, install, newDiscoverCmd(&statePath), newUpgradeHelperCmd(), newVerifySumsCmd(),
+		enroll, run, status, install, newDiscoverCmd(&statePath), newSmartDNSCmd(&statePath), newUpgradeHelperCmd(), newVerifySumsCmd(),
 	)
 	return root
 }

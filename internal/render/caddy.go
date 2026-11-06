@@ -115,6 +115,13 @@ func renderCaddy(cfg *config.Config, res Resolver, opts Options) (json.RawMessag
 
 	root := obj{"admin": obj{"listen": opts.AdminListen}, "apps": apps}
 	renderLogging(root, httpApp, opts)
+	fwd, err := forwardServer(cfg, res)
+	if err != nil {
+		return nil, err
+	}
+	if fwd != nil {
+		httpApp["servers"].(obj)[ForwardServer] = fwd
+	}
 	if st := renderStorage(opts); st != nil {
 		root["storage"] = st
 	}
@@ -174,6 +181,9 @@ func appHandlers(cfg *config.Config, name string, app config.App, res Resolver, 
 	hs = append(hs, sec...)
 	rp, err := reverseProxy(cfg, app)
 	if err != nil {
+		return nil, err
+	}
+	if rp, err = withForwarding(cfg, res, name, app, rp); err != nil {
 		return nil, err
 	}
 	return append(hs, rp), nil

@@ -15,9 +15,12 @@ import (
 )
 
 var (
-	nameRe    = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
-	labelRe   = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
-	steerings = []string{"round_robin", "weighted", "least_conn", "failover", "random", "ip_hash"}
+	nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	// qualifiedNameRe also admits one namespace label ("tq7k2m.nas"), as
+	// written by a panel that merges several tenants onto one node.
+	qualifiedNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}(\.[a-z0-9][a-z0-9-]{0,62})?$`)
+	labelRe         = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	steerings       = []string{"round_robin", "weighted", "least_conn", "failover", "random", "ip_hash"}
 )
 
 // Error is a single validation problem, located by its YAML path.
@@ -71,6 +74,8 @@ func (c *Config) Validate() error {
 	c.validateAdmins(v)
 	c.validateSmartDNS(v)
 	c.validateMesh(v)
+	c.validateForward(v)
+	c.validateRealms(v)
 	return errors.Join(v.errs...)
 }
 
@@ -201,6 +206,8 @@ func (c *Config) validateTunnels(v *validator) {
 		}
 	}
 
+	c.validateTunnelTables(v, names)
+
 	// Site subnets may only overlap when both tunnels are remapped, otherwise
 	// the edge cannot tell which tunnel a destination belongs to.
 	for i, a := range names {
@@ -213,12 +220,54 @@ func (c *Config) validateTunnels(v *validator) {
 	}
 }
 
+// validateTunnelTables checks explicit tables. Tunnels without one take
+// TunnelTableMin + their index in sorted name order (see TunnelTable), so an
+// explicit table must not land on such a number either.
+func (c *Config) validateTunnelTables(v *validator, names []string) {
+	tables := map[int]string{}
+	for _, name := range names {
+		t := c.Tunnels[name]
+		if t.Table == 0 {
+			continue
+		}
+		p := "tunnels." + name + ".table"
+		switch other, dup := tables[t.Table]; {
+		case t.VirtualPrefix == "":
+			v.add(p, "only applies to remapped tunnels (set virtual_prefix)")
+		case t.Table < TunnelTableMin || t.Table > TunnelTableMax:
+			v.add(p, "must be %d-%d, got %d", TunnelTableMin, TunnelTableMax, t.Table)
+		case dup:
+			v.add(p, "table %d is already used by tunnel %q", t.Table, other)
+		default:
+			tables[t.Table] = name
+		}
+	}
+	for i, name := range names {
+		t := c.Tunnels[name]
+		if t.Table != 0 || t.VirtualPrefix == "" {
+			continue
+		}
+		if other, ok := tables[TunnelTableMin+i]; ok {
+			v.add("tunnels."+other+".table", "table %d is the implicit table of tunnel %q; set a table on that tunnel too, or pick another", TunnelTableMin+i, name)
+		}
+	}
+}
+
+// TunnelTable returns the routing table (and fwmark) of a remapped tunnel:
+// its explicit table, else TunnelTableMin + its index in sorted name order.
+func (c *Config) TunnelTable(name string) int {
+	if t := c.Tunnels[name].Table; t != 0 {
+		return t
+	}
+	return TunnelTableMin + slices.Index(sortedKeys(c.Tunnels), name)
+}
+
 func (c *Config) validatePools(v *validator) {
 	for _, name := range sortedKeys(c.Pools) {
 		pl := c.Pools[name]
 		p := "pools." + name
-		if !nameRe.MatchString(name) {
-			v.add(p, "name must match %s", nameRe)
+		if !qualifiedNameRe.MatchString(name) {
+			v.add(p, "name must match %s", qualifiedNameRe)
 		}
 		if !slices.Contains(steerings, pl.Steering) {
 			v.add(p+".steering", "must be one of %s; got %q", strings.Join(steerings, ", "), pl.Steering)
@@ -358,8 +407,8 @@ func (c *Config) validateApps(v *validator) {
 	for _, name := range sortedKeys(c.Apps) {
 		a := c.Apps[name]
 		p := "apps." + name
-		if !nameRe.MatchString(name) {
-			v.add(p, "name must match %s", nameRe)
+		if !qualifiedNameRe.MatchString(name) {
+			v.add(p, "name must match %s", qualifiedNameRe)
 		}
 		if len(a.Hosts) == 0 {
 			v.add(p+".hosts", "at least one host is required")

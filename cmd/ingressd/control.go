@@ -3,6 +3,7 @@
 package main
 
 import (
+	"cmp"
 	"net/http"
 
 	"github.com/ingressd/ingressd/pkg/config"
@@ -20,7 +21,7 @@ func controlHandlers(cfg *config.Config, e *env) map[string]http.Handler {
 	if h := cfg.Edge.Admin.Hostname; h != "" {
 		hosts[h] = machineHostMux(cfg, e)
 	}
-	if h := e.machineHost(); h != "" {
+	if h := cmp.Or(e.machineHost(), cfg.MachineHostFallback()); h != "" {
 		if _, ok := hosts[h]; !ok {
 			hosts[h] = machineHostMux(cfg, e)
 		}

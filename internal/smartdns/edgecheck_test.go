@@ -32,7 +32,7 @@ func TestEdgeOrder(t *testing.T) {
 	seen := map[string]string{"18.0.0.5": "NL", "18.0.0.2": "UA", "18.0.0.9": "", "18.0.0.1": "NL", "18.0.0.7": "GB"}
 	var probes atomic.Int32
 	c := newEdgeChecker()
-	c.setChecks(&config.SmartDNS{Checks: []config.SmartDNSCheck{testCheck}})
+	c.setChecks([]config.SmartDNSCheck{testCheck})
 	c.probe = func(_ context.Context, _ *egress, ip netip.Addr, ck config.SmartDNSCheck) string {
 		probes.Add(1)
 		if ck.Field != "countryCode" {
@@ -94,7 +94,7 @@ func TestProbeEdge(t *testing.T) {
 	probePort = port
 	defer func() { probePort = origPort }()
 
-	got := probeEdge(context.Background(), &egress{exit: "nl"}, netip.MustParseAddr("127.0.0.1"), ck)
+	got := probeEdge(context.Background(), newEgress(EgressOptions{Name: "nl"}), netip.MustParseAddr("127.0.0.1"), ck)
 	if got != "NL" {
 		t.Fatalf("probe = %q", got)
 	}
@@ -103,7 +103,7 @@ func TestProbeEdge(t *testing.T) {
 	}
 	// TLS failures count as unknown.
 	probeTLSConfig = func(host string) *tls.Config { return &tls.Config{ServerName: host} }
-	if got := probeEdge(context.Background(), &egress{exit: "nl"}, netip.MustParseAddr("127.0.0.1"), ck); got != "" {
+	if got := probeEdge(context.Background(), newEgress(EgressOptions{Name: "nl"}), netip.MustParseAddr("127.0.0.1"), ck); got != "" {
 		t.Errorf("untrusted edge = %q", got)
 	}
 }

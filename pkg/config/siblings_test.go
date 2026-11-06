@@ -28,6 +28,8 @@ tunnels:
         edge_public_key: "` + keyB + `"
         transit: 100.64.0.8/30
         ws_url: wss://node-b.example.net/.ingressd/tunnel/home
+        priority: 1
+        pop: ams
       - node: nod_c
         endpoint: 198.51.100.7:51820
         edge_public_key: "` + keyA + `"
@@ -37,8 +39,6 @@ tunnels:
     vendor: unifi
     listen_port: 51824
     transit: 100.64.0.68/30
-smartdns:
-  enabled: true
 `
 
 func TestMultiPopTransitsValid(t *testing.T) {
@@ -48,16 +48,12 @@ func TestMultiPopTransitsValid(t *testing.T) {
 	}
 	s := c.Tunnels["home"].Siblings
 	if len(s) != 2 || s[0].Node != "nod_b" || s[0].EdgePublicKey != keyB || s[0].Transit != "100.64.0.8/30" ||
-		s[0].WSURL != "wss://node-b.example.net/.ingressd/tunnel/home" || s[1].Endpoint != "198.51.100.7:51820" {
+		s[0].WSURL != "wss://node-b.example.net/.ingressd/tunnel/home" || s[1].Endpoint != "198.51.100.7:51820" ||
+		s[0].Priority != 1 || s[0].PoP != "ams" || s[1].Priority != 0 {
 		t.Fatalf("siblings: %+v", s)
 	}
-	// The Smart DNS resolver listens on each /30's edge address (.1).
-	var got []string
-	for _, a := range c.SmartDNSListen() {
-		got = append(got, a.String())
-	}
-	if strings.Join(got, ",") != "100.64.0.5,100.64.0.69" {
-		t.Errorf("smart DNS listen = %v", got)
+	if a, _ := c.TransitEdgeAddr("home"); a.String() != "100.64.0.5" {
+		t.Errorf("edge transit address = %v", a)
 	}
 }
 
@@ -73,6 +69,7 @@ func TestSiblingValidation(t *testing.T) {
 		{"host bits", "transit: 100.64.0.8/30", "transit: 100.64.0.9/30", "host bits"},
 		{"bad ws", "wss://node-b.example.net/.ingressd/tunnel/home", "https://node-b.example.net/", "ws_url"},
 		{"duplicate node", "node: nod_c", "node: nod_b", "listed twice"},
+		{"negative priority", "priority: 1", "priority: -1", "siblings[0].priority"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// Package smartdns is the Smart DNS add-on of the node agent (see
-// docs/rev1/ARCHITECTURE.md §7), ported from an earlier prototype:
+// Package smartdns is Smart DNS (docs/rev1/CONNECTOR-SMARTDNS.md):
 //
-//   - a resolver on the home node's tunnel transit addresses answers names of
-//     enabled services with its own transit address, after resolving them at
-//     the service's exit (so CDNs pick edges in the exit's country);
-//   - an SNI/Host relay on the same addresses forwards those connections over
-//     the node mesh to the exit node, which connects to the destination
-//     (optionally through a VPN interface). TLS stays end to end;
-//   - on exit nodes, a resolve endpoint (mesh API) and a relay listener on the
-//     mesh address serve the other nodes of the org.
+//   - Manager is the home side, run by the connector: a resolver on a LAN
+//     address answers names of enabled services with that address, after
+//     resolving them at the service's exit (so CDNs pick edges in the exit's
+//     country), and an SNI/Host relay on the same address connects those
+//     streams through the exit. TLS stays end to end. Exits are local (a VPN
+//     tunnel on the connector) or remote (a node exit, through the
+//     connector's tunnel to that node).
+//   - ExitServer is the node side: it lets its own connector sites resolve
+//     and connect from the node's public IP.
 //
-// It fails closed: when an exit is down, service names get SERVFAIL and
-// their traffic is never sent anywhere else.
+// It fails closed: when every exit of a service is down, its names get
+// SERVFAIL and its traffic is never sent anywhere else.
 package smartdns
 
 import (
@@ -34,136 +34,145 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
-
-	"github.com/ingressd/ingressd/internal/mesh"
-	"github.com/ingressd/ingressd/internal/render"
-	"github.com/ingressd/ingressd/internal/smartdns/wgconf"
 	"github.com/ingressd/ingressd/pkg/config"
 	"github.com/ingressd/ingressd/pkg/nodeproto"
 )
 
+// Plan is what the home side runs, built by the connector from its signed
+// site config.
+type Plan struct {
+	// Site names the connector site (recent lookups).
+	Site string
+	// Listen are the addresses the resolver and relay bind.
+	Listen []netip.Addr
+	// Upstream answers every name no service routes.
+	Upstream      []string
+	FailbackAfter time.Duration
+	Services      map[string]config.SmartDNSSiteService
+	Exits         map[string]PlanExit
+	Checks        []config.SmartDNSCheck
+}
+
+// PlanExit is a local egress (Egress set) or a node exit (Node set).
+type PlanExit struct {
+	Country string
+	Node    string
+	Egress  *EgressOptions
+}
+
 // Options configure a Manager.
 type Options struct {
 	Log *slog.Logger
-	// StatusPath, if set, receives a JSON status snapshot every few seconds
-	// (read by `ingressd smartdns status`).
+	// StatusPath, if set, receives a JSON status snapshot every few seconds.
 	StatusPath string
-	// Device reads WireGuard state; default wgctrl.
-	Device func(name string) (*wgtypes.Device, error)
-	// Configure changes a WireGuard interface (VPN endpoint refresh);
-	// default wgctrl.
-	Configure func(name string, cfg wgtypes.Config) error
-	// TraceURL is fetched through each exit's egress to learn its public
-	// IP and country; default $INGRESSD_SMARTDNS_TRACE_URL or Cloudflare's
+	// TraceURL is fetched through each local exit to learn its public IP
+	// and country; default $INGRESSD_SMARTDNS_TRACE_URL or Cloudflare's
 	// https://1.1.1.1/cdn-cgi/trace.
 	TraceURL string
-	// Lookup resolves VPN endpoint host names; default net.DefaultResolver.
-	Lookup func(ctx context.Context, host string) ([]netip.Addr, error)
+	// Remote reaches node exits.
+	Remote ExitClient
+	// DNSPort, TLSPort and HTTPPort are where the resolver and relay listen
+	// (default 53, 443, 80).
+	DNSPort, TLSPort, HTTPPort int
+	// Listen opens listeners; default net.Listen / net.ListenPacket.
+	Listen       func(network, addr string) (net.Listener, error)
+	ListenPacket func(network, addr string) (net.PacketConn, error)
 }
 
-// state is the configuration in effect, swapped atomically on reconfigure.
+// state is the plan in effect, swapped atomically on reconfigure.
 type state struct {
-	cfg      *config.Config
+	plan     Plan
 	match    matcher
 	upstream []string
-	egress   map[string]*egress    // self exits
-	site     map[netip.Addr]string // listen address -> tunnel name
+	exits    map[string]PlanExit
+	egress   map[string]*egress // local exits
 	listen   []netip.Addr
 	routes   string // fingerprint of services/exits, to invalidate the cache
 }
 
-func (s *state) exit(name string) (config.SmartDNSExit, bool) {
-	if s.cfg == nil || s.cfg.SmartDNS == nil {
-		return config.SmartDNSExit{}, false
-	}
-	e, ok := s.cfg.SmartDNS.Exits[name]
+func (s *state) exit(name string) (PlanExit, bool) {
+	e, ok := s.exits[name]
 	return e, ok
 }
 
+// allRoutes returns one route per enabled service, sorted by service.
+func (s *state) allRoutes() []route { return s.match.routes() }
+
 type svcCounter struct{ bytes, conns atomic.Int64 }
 
-// Manager runs Smart DNS and the mesh runtime for one node.
+// Manager runs the home side of Smart DNS.
 type Manager struct {
-	log         *slog.Logger
-	statusPath  string
-	device      func(name string) (*wgtypes.Device, error)
-	configure   func(name string, cfg wgtypes.Config) error
-	resolveHost func(ctx context.Context, host string) ([]netip.Addr, error)
-	traceURL    string
-	probeMu     sync.Mutex
-	probes      map[string]*probeState // exit name -> latest egress trace
-	mesh        *mesh.Mesh
-	remote      exitClient
-	edges       *edgeChecker
-	cache       *swrCache
-	recent      *ring
-	listeners   *listenerSet
-	st          atomic.Pointer[state]
-	baseCtx     atomic.Value // context.Context
-
-	// test hooks: ports for the resolver and relay listeners
-	dnsPort, tlsPort, httpPort int
-
-	usageMu  sync.Mutex
-	usage    map[string]*svcCounter
-	reported map[string][2]int64
-
-	downMu     sync.Mutex
-	remoteDown map[string]time.Time // exit name -> when its node said it is down
-
-	refused, errors atomic.Int64
+	log          *slog.Logger
+	statusPath   string
+	probes       *prober
+	remote       ExitClient
+	edges        *edgeChecker
+	cache        *swrCache
+	recent       *ring
+	listeners    *listenerSet
+	listenFn     func(network, addr string) (net.Listener, error)
+	listenPktFn  func(network, addr string) (net.PacketConn, error)
+	st           atomic.Pointer[state]
+	baseCtx      atomic.Value // context.Context
+	dnsPort      int
+	tlsPort      int
+	httpPort     int
+	usageMu      sync.Mutex
+	usage        map[string]*svcCounter
+	reported     map[string][2]int64
+	downMu       sync.Mutex
+	remoteDown   map[string]downMark // exit name -> when (and why) its node said it is down
+	activeMu     sync.Mutex
+	active       map[string]*activeExit // service -> exit in use
+	now          func() time.Time
+	refused, err atomic.Int64
 }
 
-// New creates a Manager; call Run, then Reconfigure after every apply.
+// New creates a Manager; call Run, then Reconfigure whenever the plan
+// changes.
 func New(o Options) *Manager {
 	if o.Log == nil {
 		o.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	if o.Device == nil {
-		o.Device = mesh.WGDevice
+	if o.DNSPort == 0 {
+		o.DNSPort = 53
 	}
-	if o.Configure == nil {
-		o.Configure = mesh.WGConfigure
+	if o.TLSPort == 0 {
+		o.TLSPort = 443
 	}
-	if o.TraceURL == "" {
-		o.TraceURL = traceURLFromEnv()
+	if o.HTTPPort == 0 {
+		o.HTTPPort = 80
 	}
-	if o.Lookup == nil {
-		o.Lookup = func(ctx context.Context, host string) ([]netip.Addr, error) {
-			return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-		}
+	if o.Listen == nil {
+		o.Listen = net.Listen
+	}
+	if o.ListenPacket == nil {
+		o.ListenPacket = net.ListenPacket
 	}
 	m := &Manager{
 		log:         o.Log.With("component", "smartdns"),
 		statusPath:  o.StatusPath,
-		device:      o.Device,
-		configure:   o.Configure,
-		resolveHost: o.Lookup,
-		traceURL:    o.TraceURL,
-		probes:      map[string]*probeState{},
-		mesh:        mesh.New(o.Log.With("component", "mesh")),
+		remote:      o.Remote,
 		edges:       newEdgeChecker(),
 		cache:       newCache(),
 		recent:      newRing(recentSize),
 		usage:       map[string]*svcCounter{},
 		reported:    map[string][2]int64{},
-		remoteDown:  map[string]time.Time{},
-		dnsPort:     53,
-		tlsPort:     config.SmartDNSRelayTLSPort,
-		httpPort:    config.SmartDNSRelayHTTPPort,
+		remoteDown:  map[string]downMark{},
+		active:      map[string]*activeExit{},
+		now:         time.Now,
+		dnsPort:     o.DNSPort,
+		tlsPort:     o.TLSPort,
+		httpPort:    o.HTTPPort,
+		listenFn:    o.Listen,
+		listenPktFn: o.ListenPacket,
 	}
-	m.mesh.Device = o.Device
-	m.remote = meshExitClient{m.mesh}
+	m.probes = newProber(m.log, o.TraceURL, m.ctx)
 	m.listeners = &listenerSet{log: m.log, running: map[string]io.Closer{}, failed: map[string]string{}}
 	m.baseCtx.Store(ctxBox{context.Background()})
-	m.st.Store(&state{match: matcher{}, egress: map[string]*egress{}, site: map[netip.Addr]string{}})
-	m.mesh.Handle("POST /v1/resolve", m.resolveHandler())
+	m.st.Store(&state{exits: map[string]PlanExit{}, egress: map[string]*egress{}, match: matcher{}})
 	return m
 }
-
-// Mesh returns the mesh runtime (status, peers).
-func (m *Manager) Mesh() *mesh.Mesh { return m.mesh }
 
 // ctxBox gives atomic.Value one concrete type.
 type ctxBox struct{ context.Context }
@@ -172,11 +181,11 @@ func (m *Manager) ctx() context.Context { return m.baseCtx.Load().(ctxBox).Conte
 
 func (m *Manager) state() *state { return m.st.Load() }
 
-// Run runs background work (mesh probes, listener retries, status file)
-// until ctx ends.
+// Run runs background work (exit health, listener retries, traces, status
+// file) until ctx ends.
 func (m *Manager) Run(ctx context.Context) {
 	m.baseCtx.Store(ctxBox{ctx})
-	go m.mesh.Run(ctx)
+	go m.runHealthPoll(ctx)
 	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
 	for n := 0; ; n++ {
@@ -189,69 +198,41 @@ func (m *Manager) Run(ctx context.Context) {
 		if n%3 == 0 {
 			m.listeners.retry()
 		}
-		m.watchEgress(time.Now())
+		st := m.state()
+		m.probes.watch(st.egress, time.Now())
+		m.refreshActive(st)
 		m.writeStatus()
 	}
 }
 
-// Reconfigure applies cfg; res resolves secret:// references (VPN configs).
-// Call it after every successful apply (the kernel side, ix-mesh and VPN
-// interfaces, is applied by the pipeline first).
-func (m *Manager) Reconfigure(cfg *config.Config, res func(string) (string, error)) {
-	st := &state{cfg: cfg, match: newMatcher(cfg.SmartDNS), egress: map[string]*egress{}, site: map[netip.Addr]string{}}
-	if s := cfg.SmartDNS; s != nil {
-		for _, u := range s.Upstream {
-			st.upstream = append(st.upstream, hostPort(u))
-		}
-		for _, name := range sortedKeys(s.Exits) {
-			ex := s.Exits[name]
-			if !ex.IsSelf() {
-				continue
-			}
-			e := &egress{exit: name, country: ex.Country, dns: st.upstream, public: cfg.Edge.PublicIPv4, device: m.device}
-			if ex.VPN != "" {
-				e.ifname = config.VPNInterfaceName(name)
-				e.mark, _ = render.VPNMark(cfg, name)
-				e.public = ""
-				if text, err := res(ex.VPN); err != nil {
-					m.log.Error("exit VPN config unavailable", "exit", name, "err", err)
-				} else if wc, err := wgconf.Parse(text); err != nil {
-					m.log.Error("exit VPN config invalid", "exit", name, "err", err)
-				} else {
-					e.endpoint, e.peerKey = wc.Peer.Endpoint, wc.Peer.PublicKey
-					// The tunnel's DNS servers resolve service names (the
-					// provider's resolver sees the exit's location); without
-					// a DNS line the upstream resolvers are asked through
-					// the tunnel. The node's own resolver is never changed.
-					if len(wc.DNS) > 0 {
-						e.dns = nil
-						for _, d := range wc.DNS {
-							e.dns = append(e.dns, hostPort(d.String()))
-						}
-					}
-				}
-			}
-			st.egress[name] = e
-		}
-		var fp []string
-		for _, name := range sortedKeys(s.Exits) {
-			ex := s.Exits[name]
-			fp = append(fp, "e:"+name+"="+ex.Node+","+ex.VPN)
-		}
-		st.routes = strings.Join(fp, ";")
+// Reconfigure applies p.
+func (m *Manager) Reconfigure(p Plan) {
+	st := &state{plan: p, exits: map[string]PlanExit{}, egress: map[string]*egress{}, listen: slices.Clone(p.Listen)}
+	for _, u := range p.Upstream {
+		st.upstream = append(st.upstream, hostPort(u))
 	}
-	st.listen = cfg.SmartDNSListen()
-	for _, name := range sortedKeys(cfg.Tunnels) {
-		if a, ok := cfg.TransitEdgeAddr(name); ok {
-			st.site[a] = name
+	st.match = newMatcher(p.Services)
+	var fp []string
+	for _, name := range sortedKeys(p.Exits) {
+		ex := p.Exits[name]
+		st.exits[name] = ex
+		if ex.Egress != nil {
+			o := *ex.Egress
+			o.Name, o.Country = name, ex.Country
+			st.egress[name] = newEgress(o)
+			fp = append(fp, "e:"+name+"=local:"+o.Sig)
+		} else {
+			fp = append(fp, "e:"+name+"=node:"+ex.Node)
 		}
 	}
+	slices.SortFunc(st.listen, func(a, b netip.Addr) int { return a.Compare(b) })
+	st.routes = strings.Join(fp, ";")
 	if old := m.state(); old.routes != st.routes {
 		m.cache.clear()
 	}
 	m.st.Store(st)
-	m.edges.setChecks(cfg.SmartDNS)
-	m.mesh.Reconfigure(cfg)
+	m.pruneActive(st.allRoutes())
+	m.edges.setChecks(p.Checks)
 
 	want := map[string]func() (io.Closer, error){}
 	for _, a := range st.listen {
@@ -261,11 +242,18 @@ func (m *Manager) Reconfigure(cfg *config.Config, res func(string) (string, erro
 		want["relay-tls "+addrPort(a, m.tlsPort)] = func() (io.Closer, error) { return m.listenRelay(addrPort(a, m.tlsPort), true) }
 		want["relay-http "+addrPort(a, m.httpPort)] = func() (io.Closer, error) { return m.listenRelay(addrPort(a, m.httpPort), false) }
 	}
-	if self, ok := cfg.Mesh.MeshPrefix(); ok && len(st.egress) > 0 {
-		ap := addrPort(self.Addr(), config.MeshRelayPort)
-		want["exit-relay "+ap] = func() (io.Closer, error) { return m.listenExitRelay(ap) }
-	}
 	m.listeners.set(want)
+}
+
+// BindErrors returns the listeners that could not start, keyed by kind
+// (dns-udp, dns-tcp, relay-tls, relay-http).
+func (m *Manager) BindErrors() map[string]string {
+	out := map[string]string{}
+	for k, err := range m.listeners.failures() {
+		kind, _, _ := strings.Cut(k, " ")
+		out[kind] = err
+	}
+	return out
 }
 
 func addrPort(a netip.Addr, port int) string { return net.JoinHostPort(a.String(), strconv.Itoa(port)) }
@@ -295,27 +283,8 @@ func (m *Manager) usageTotals() []nodeproto.ServiceUsage {
 	return out
 }
 
-// --- node agent hooks ---
-//
-// Manager implements the node agent's Smart DNS hook interfaces
-// (internal/nodeagent/hooks.go: ExitReporter, MeshReporter,
-// ServiceUsageReporter, RecentLookupReporter, Capability), so wiring is
-// nodeagent.SetSmartDNS(manager).
-
-var _ interface {
-	Exits() []nodeproto.ExitStatus
-	MeshPeers() []nodeproto.MeshPeer
-	TakeServiceUsage() []nodeproto.ServiceUsage
-	RecentLookups(limit int) []nodeproto.RecentLookup
-	Capabilities() []string
-} = (*Manager)(nil)
-
-// Capabilities are announced in hello.
-func (m *Manager) Capabilities() []string { return []string{"smartdns", "mesh"} }
-
 // TakeServiceUsage returns relay bytes and connections per service since the
-// previous call (usage deltas for nodeproto.Usage.Smart). The caller owns
-// persisting unsent deltas.
+// previous call. The caller owns resending deltas it could not deliver.
 func (m *Manager) TakeServiceUsage() []nodeproto.ServiceUsage {
 	m.usageMu.Lock()
 	defer m.usageMu.Unlock()
@@ -342,27 +311,28 @@ func (m *Manager) RecentLookups(limit int) []nodeproto.RecentLookup {
 	return out
 }
 
-// MeshPeers reports the mesh peers.
-func (m *Manager) MeshPeers() []nodeproto.MeshPeer { return m.mesh.Status() }
-
-// Exits reports the exits this node egresses for.
+// Exits reports the local exits.
 func (m *Manager) Exits() []nodeproto.ExitStatus {
 	st := m.state()
 	out := []nodeproto.ExitStatus{}
 	for _, name := range sortedKeys(st.egress) {
-		e := st.egress[name]
-		up, msg := e.up()
-		country, edges := m.edges.summary(name)
-		ip, traced, traceErr := m.probe(e).snapshot()
-		if country == "" {
-			country = traced
-		}
-		egressIP, health := exitHealth(e, ip, traced, traceErr, up)
-		es := nodeproto.ExitStatus{Name: name, Country: country, Up: up, Egress: egressIP, VPN: e.ifname != "", Endpoint: e.endpointNow()}
-		es.Message = strings.Trim(strings.Join([]string{msg, health, edges}, "; "), "; ")
-		out = append(out, es)
+		out = append(out, exitStatus(name, st.egress[name], m.probes, m.edges))
 	}
 	return out
+}
+
+// exitStatus describes a local egress for status reports.
+func exitStatus(name string, e *egress, pr *prober, edges *edgeChecker) nodeproto.ExitStatus {
+	up, msg := e.up()
+	country, edgeMsg := edges.summary(name)
+	ip, traced, traceErr := pr.probe(e).snapshot()
+	if country == "" {
+		country = traced
+	}
+	egressIP, health := exitHealth(e, ip, traced, traceErr, up)
+	es := nodeproto.ExitStatus{Name: name, Country: country, Up: up, Egress: egressIP, VPN: e.vpn, Endpoint: e.endpointNow()}
+	es.Message = strings.Trim(strings.Join([]string{msg, health, edgeMsg}, "; "), "; ")
+	return es
 }
 
 // EdgeResults returns every edge check result (for diagnostics).
@@ -370,7 +340,7 @@ func (m *Manager) EdgeResults() []EdgeResult { return m.edges.snapshot() }
 
 // --- status file ---
 
-// RemoteExit is an exit on another node, as this node sees it.
+// RemoteExit is a node exit, as the connector sees it.
 type RemoteExit struct {
 	Name    string `json:"name"`
 	Node    string `json:"node"`
@@ -381,38 +351,37 @@ type RemoteExit struct {
 
 // Status is the snapshot written to the status file.
 type Status struct {
-	Updated     time.Time                `json:"updated"`
-	Listen      []string                 `json:"listen"`
-	Exits       []nodeproto.ExitStatus   `json:"exits"`
-	RemoteExits []RemoteExit             `json:"remote_exits"`
-	Mesh        []nodeproto.MeshPeer     `json:"mesh"`
-	Usage       []nodeproto.ServiceUsage `json:"usage"` // cumulative since start
-	Edges       []EdgeResult             `json:"edges"`
-	Refused     int64                    `json:"relay_refused"`
-	Errors      int64                    `json:"relay_errors"`
-	Recent      []Lookup                 `json:"recent"`
+	Updated     time.Time                 `json:"updated"`
+	Listen      []string                  `json:"listen"`
+	BindErrors  map[string]string         `json:"bind_errors,omitempty"`
+	Exits       []nodeproto.ExitStatus    `json:"exits"`
+	RemoteExits []RemoteExit              `json:"remote_exits"`
+	Services    []nodeproto.ServiceStatus `json:"services"`
+	Usage       []nodeproto.ServiceUsage  `json:"usage"` // cumulative since start
+	Edges       []EdgeResult              `json:"edges"`
+	Refused     int64                     `json:"relay_refused"`
+	Errors      int64                     `json:"relay_errors"`
+	Recent      []Lookup                  `json:"recent"`
 }
 
 // Snapshot returns the current status.
 func (m *Manager) Snapshot() Status {
 	st := m.state()
 	s := Status{
-		Updated: time.Now().UTC(), Listen: []string{}, Exits: m.Exits(), RemoteExits: []RemoteExit{},
-		Mesh: m.MeshPeers(), Usage: m.usageTotals(), Edges: m.EdgeResults(),
-		Refused: m.refused.Load(), Errors: m.errors.Load(), Recent: m.recent.list(100),
+		Updated: time.Now().UTC(), Listen: []string{}, BindErrors: m.BindErrors(), Exits: m.Exits(), RemoteExits: []RemoteExit{},
+		Services: m.Services(), Usage: m.usageTotals(), Edges: m.EdgeResults(),
+		Refused: m.refused.Load(), Errors: m.err.Load(), Recent: m.recent.list(100),
 	}
 	for _, a := range st.listen {
 		s.Listen = append(s.Listen, a.String())
 	}
-	if st.cfg != nil && st.cfg.SmartDNS != nil {
-		for _, name := range sortedKeys(st.cfg.SmartDNS.Exits) {
-			ex := st.cfg.SmartDNS.Exits[name]
-			if ex.IsSelf() {
-				continue
-			}
-			up, msg := m.exitUp(st, name)
-			s.RemoteExits = append(s.RemoteExits, RemoteExit{Name: name, Node: ex.Node, Country: ex.Country, Up: up, Message: msg})
+	for _, name := range sortedKeys(st.exits) {
+		ex := st.exits[name]
+		if ex.Egress != nil {
+			continue
 		}
+		up, msg := m.exitUp(st, name)
+		s.RemoteExits = append(s.RemoteExits, RemoteExit{Name: name, Node: ex.Node, Country: ex.Country, Up: up, Message: msg})
 	}
 	return s
 }
@@ -421,16 +390,20 @@ func (m *Manager) writeStatus() {
 	if m.statusPath == "" {
 		return
 	}
-	b, err := json.MarshalIndent(m.Snapshot(), "", "  ")
+	writeStatusFile(m.statusPath, m.Snapshot())
+}
+
+func writeStatusFile(path string, v any) {
+	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(m.statusPath), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return
 	}
-	tmp := m.statusPath + ".tmp"
+	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o640); err == nil {
-		os.Rename(tmp, m.statusPath)
+		_ = os.Rename(tmp, path)
 	}
 }
 
@@ -484,6 +457,11 @@ func (l *listenerSet) syncLocked() {
 			l.log.Info("stopped", "listener", k)
 		}
 	}
+	for k := range l.failed {
+		if _, ok := l.want[k]; !ok {
+			delete(l.failed, k)
+		}
+	}
 	keys := make([]string, 0, len(l.want))
 	for k := range l.want {
 		keys = append(keys, k)
@@ -505,6 +483,16 @@ func (l *listenerSet) syncLocked() {
 		l.running[k] = c
 		l.log.Info("listening", "listener", k)
 	}
+}
+
+func (l *listenerSet) failures() map[string]string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make(map[string]string, len(l.failed))
+	for k, v := range l.failed {
+		out[k] = v
+	}
+	return out
 }
 
 func (l *listenerSet) closeAll() {

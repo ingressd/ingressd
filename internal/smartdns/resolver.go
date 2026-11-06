@@ -65,13 +65,13 @@ func netAddr(a net.Addr) netip.Addr {
 func (m *Manager) listenDNS(network, addr string) (io.Closer, error) {
 	srv := &dns.Server{Handler: m, Net: network}
 	if network == "udp" {
-		pc, err := net.ListenPacket("udp4", addr)
+		pc, err := m.listenPktFn("udp4", addr)
 		if err != nil {
 			return nil, err
 		}
 		srv.PacketConn = pc
 	} else {
-		ln, err := net.Listen("tcp4", addr)
+		ln, err := m.listenFn("tcp4", addr)
 		if err != nil {
 			return nil, err
 		}
@@ -120,7 +120,7 @@ func (m *Manager) answer(localAddr, remoteAddr net.Addr, req *dns.Msg) *dns.Msg 
 	st := m.state()
 	q := req.Question[0]
 	name := normalize(q.Name)
-	entry := Lookup{Time: time.Now().UTC(), Client: client.String(), Site: st.site[local], Name: name, Type: dns.TypeToString[q.Qtype]}
+	entry := Lookup{Time: time.Now().UTC(), Client: client.String(), Site: st.plan.Site, Name: name, Type: dns.TypeToString[q.Qtype]}
 	if entry.Type == "" {
 		entry.Type = fmt.Sprintf("TYPE%d", q.Qtype)
 	}
@@ -143,7 +143,7 @@ func (m *Manager) answer(localAddr, remoteAddr net.Addr, req *dns.Msg) *dns.Msg 
 		return resp
 	}
 
-	entry.Routed, entry.Service, entry.Exit = true, r.Service, r.Exit
+	entry.Routed, entry.Service = true, r.Service
 	switch q.Qtype {
 	case dns.TypeAAAA, dns.TypeHTTPS, dns.TypeSVCB:
 		// Keep clients on IPv4 and the plain hostname: the relay and
@@ -155,7 +155,8 @@ func (m *Manager) answer(localAddr, remoteAddr net.Addr, req *dns.Msg) *dns.Msg 
 		entry.Result = "empty (only A is routed)"
 		return reply(req, dns.RcodeSuccess)
 	}
-	a, rcode, how, err := m.lookup(ctx, st, r, name)
+	a, rcode, how, exit, err := m.lookup(ctx, st, r, name)
+	entry.Exit = exit
 	if err != nil {
 		// Fail closed: never answer a service name from anywhere else.
 		entry.Result = "SERVFAIL (" + err.Error() + ")"
@@ -188,7 +189,7 @@ func joinAddrs(as []netip.Addr) string {
 
 // forward sends a non-service query to the upstream resolvers.
 func (m *Manager) forward(ctx context.Context, st *state, req *dns.Msg) (*dns.Msg, error) {
-	return exchange(ctx, st.upstream, &net.Dialer{Timeout: dnsTimeout}, req)
+	return exchange(ctx, st.upstream, hostDial, req)
 }
 
 // exitUp reports whether an exit can egress right now.
@@ -197,44 +198,73 @@ func (m *Manager) exitUp(st *state, exit string) (bool, string) {
 	if !ok {
 		return false, fmt.Sprintf("unknown exit %q", exit)
 	}
-	if ex.IsSelf() {
+	if ex.Egress != nil {
 		e, ok := st.egress[exit]
 		if !ok {
 			return false, "exit not configured"
 		}
 		return e.up()
 	}
-	if !m.remote.Up(ex.Node) {
-		return false, fmt.Sprintf("exit node %s is unreachable over the mesh", ex.Node)
+	if m.remote == nil || !m.remote.Up(ex.Node) {
+		return false, fmt.Sprintf("the tunnel to exit node %s is down", ex.Node)
 	}
 	m.downMu.Lock()
-	t, down := m.remoteDown[exit]
+	d, down := m.remoteDown[exit]
 	m.downMu.Unlock()
-	if down && time.Since(t) < remoteDownHold {
+	if down && m.now().Sub(d.at) < remoteDownHold {
+		if d.msg != "" {
+			return false, fmt.Sprintf("exit node %s reports the exit down: %s", ex.Node, d.msg)
+		}
 		return false, fmt.Sprintf("exit node %s reports the exit down", ex.Node)
 	}
 	return true, ""
 }
 
-func (m *Manager) setRemoteDown(exit string, down bool) {
+type downMark struct {
+	at  time.Time
+	msg string
+}
+
+func (m *Manager) setRemoteDown(exit string, down bool, msg string) {
 	m.downMu.Lock()
 	defer m.downMu.Unlock()
 	if down {
-		m.remoteDown[exit] = time.Now()
+		m.remoteDown[exit] = downMark{m.now(), msg}
 	} else {
 		delete(m.remoteDown, exit)
 	}
 }
 
-// lookup resolves a service name at its exit, through the cache: fresh
-// answers are returned as is, expired ones (up to 24 h) are returned at once
-// and refreshed in the background, so a failing exit resolver keeps the last
-// good answer. A down exit fails closed regardless of the cache.
-func (m *Manager) lookup(ctx context.Context, st *state, r route, name string) (answer, int, string, error) {
-	if up, msg := m.exitUp(st, r.Exit); !up {
-		return answer{}, 0, "", fmt.Errorf("%w: %s", errExitDown, msg)
+// lookup resolves a service name at the exit pick chooses and returns that
+// exit, so the relay connects through the exit whose location the answer
+// is for. An exit found down while resolving makes it try the next one;
+// with every exit down it fails closed, whatever is cached.
+func (m *Manager) lookup(ctx context.Context, st *state, r route, name string) (answer, int, string, string, error) {
+	tried := map[string]bool{}
+	var lastErr error
+	for {
+		exit, err := m.pick(st, r)
+		if err != nil {
+			return answer{}, 0, "", "", err
+		}
+		if tried[exit] {
+			return answer{}, 0, "", exit, lastErr
+		}
+		tried[exit] = true
+		a, rcode, how, err := m.lookupAt(ctx, st, exit, name)
+		if err == nil || !errors.Is(err, errExitDown) || ctx.Err() != nil {
+			return a, rcode, how, exit, err
+		}
+		lastErr = err
 	}
-	k := cacheKey{r.Exit, name}
+}
+
+// lookupAt resolves name at exit through the cache: fresh answers are
+// returned as is, expired ones (up to 24 h) are returned at once and
+// refreshed in the background, so a failing exit resolver keeps the last
+// good answer. The caller checked that exit is up.
+func (m *Manager) lookupAt(ctx context.Context, st *state, exit, name string) (answer, int, string, error) {
+	k := cacheKey{exit, name}
 	a, cs := m.cache.get(k)
 	switch cs {
 	case cacheFresh:
@@ -245,48 +275,54 @@ func (m *Manager) lookup(ctx context.Context, st *state, r route, name string) (
 				defer m.cache.endRefresh(k)
 				ctx, cancel := context.WithTimeout(m.ctx(), queryTimeout)
 				defer cancel()
-				if _, _, err := m.resolveAtExit(ctx, st, r.Exit, name); err != nil {
-					m.log.Warn("background refresh failed; serving the stale answer", "name", name, "exit", r.Exit, "err", err)
+				if _, _, err := m.resolveAtExit(ctx, st, exit, name); err != nil {
+					m.log.Warn("background refresh failed; serving the stale answer", "name", name, "exit", exit, "err", err)
 				}
 			}()
 		}
 		return a, dns.RcodeSuccess, "stale (refreshing)", nil
 	}
-	rcode, a, err := m.resolveAtExit(ctx, st, r.Exit, name)
+	rcode, a, err := m.resolveAtExit(ctx, st, exit, name)
 	if err != nil {
 		return answer{}, 0, "", err
 	}
-	return a, rcode, "exit " + r.Exit, nil
+	return a, rcode, "exit " + exit, nil
 }
 
-// resolveAtExit asks the exit (this node or a mesh peer) and caches a good
-// answer.
+// resolveAtExit asks the exit (a local egress or a node exit) and caches a
+// good answer.
 func (m *Manager) resolveAtExit(ctx context.Context, st *state, exit, name string) (int, answer, error) {
 	ex, ok := st.exit(exit)
 	if !ok {
 		return 0, answer{}, fmt.Errorf("unknown exit %q", exit)
 	}
+	local := ex.Egress != nil
 	var resp resolveResponse
-	if ex.IsSelf() {
-		resp = m.resolveLocal(ctx, exit, name)
+	if local {
+		e, ok := st.egress[exit]
+		if !ok {
+			return 0, answer{}, fmt.Errorf("exit %q not configured", exit)
+		}
+		resp = resolveVia(ctx, e, m.edges, name)
 	} else {
+		if m.remote == nil {
+			return 0, answer{}, fmt.Errorf("%w: no tunnel to exit node %s", errExitDown, ex.Node)
+		}
 		var err error
-		resp, err = m.remote.Resolve(ctx, ex.Node, exit, name)
+		resp, err = m.remote.Resolve(ctx, ex.Node, name)
 		if err != nil {
-			if !errors.Is(err, context.Canceled) {
-				m.remote.MarkDown(ex.Node, err)
-			}
+			m.setRemoteDown(exit, true, err.Error())
 			return 0, answer{}, fmt.Errorf("%w: %v", errExitDown, err)
 		}
 	}
 	if !resp.ExitUp {
-		if !ex.IsSelf() {
-			m.setRemoteDown(exit, true)
+		if !local {
+			m.setRemoteDown(exit, true, resp.Error)
 		}
 		return 0, answer{}, fmt.Errorf("%w: %s", errExitDown, resp.Error)
 	}
-	if !ex.IsSelf() {
-		m.setRemoteDown(exit, false)
+	if !local {
+		m.setRemoteDown(exit, false, "")
 	}
 	if resp.Error != "" {
 		return 0, answer{}, fmt.Errorf("exit %s could not resolve %s: %s", exit, name, resp.Error)
@@ -296,4 +332,22 @@ func (m *Manager) resolveAtExit(ctx context.Context, st *state, exit, name strin
 		m.cache.put(cacheKey{exit, name}, a)
 	}
 	return resp.Rcode, a, nil
+}
+
+// resolveVia resolves name from a local egress (a connector VPN exit, or a
+// node exit serving its connector sites).
+func resolveVia(ctx context.Context, e *egress, edges *edgeChecker, name string) resolveResponse {
+	if up, msg := e.up(); !up {
+		return resolveResponse{Error: msg}
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	rcode, a, err := e.resolve(ctx, name)
+	if err != nil {
+		return resolveResponse{ExitUp: true, Error: err.Error()}
+	}
+	if len(a.Addrs) > 0 {
+		edges.prewarm(e, name, a.Addrs)
+	}
+	return resolveResponse{ExitUp: true, Rcode: rcode, Addrs: a.Addrs, TTL: int(a.TTL / time.Second)}
 }

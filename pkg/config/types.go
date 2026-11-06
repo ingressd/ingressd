@@ -36,6 +36,11 @@ const (
 
 	// MaxTunnelNameLen keeps interface names within Linux's 15-byte limit.
 	MaxTunnelNameLen = 12
+
+	// TunnelTableMin and TunnelTableMax bound the routing tables (and
+	// fwmarks) of remapped tunnels.
+	TunnelTableMin = 1000
+	TunnelTableMax = 1899
 )
 
 // InterfaceName is the edge's WireGuard interface for a tunnel.
@@ -62,13 +67,16 @@ type Config struct {
 	Backups       Backups                 `yaml:"backups"`
 	SmartDNS      *SmartDNS               `yaml:"smartdns"`
 	Mesh          *Mesh                   `yaml:"mesh"`
+	// Realms are isolated tenants sharing this node (see realms.go).
+	Realms map[string]Realm `yaml:"realms,omitempty"`
 }
 
 type Edge struct {
 	Name       string `yaml:"name"`
 	PublicIPv4 string `yaml:"public_ipv4"`
 	PublicIPv6 string `yaml:"public_ipv6"`
-	// SSHPort is always allowed through the managed firewall. Default 22.
+	// SSHPort stays open through the managed firewall, to the networks in
+	// security.ssh_allow when that is set. Default 22.
 	SSHPort int `yaml:"ssh_port"`
 	// ManageFirewall lets ingressd own the host's nftables input/forward
 	// policy. Default true; set false to manage the firewall yourself.
@@ -77,6 +85,8 @@ type Edge struct {
 	ACME           ACME      `yaml:"acme"`
 	GeoIP          *GeoIP    `yaml:"geoip"`
 	CrowdSec       *CrowdSec `yaml:"crowdsec"`
+	// Forward is PoP forwarding over the mesh (forward.go).
+	Forward *Forward `yaml:"forward,omitempty"`
 }
 
 // FirewallManaged reports whether ingressd owns the host firewall.
@@ -117,9 +127,14 @@ type Tunnel struct {
 	// VirtualPrefix remaps Subnets to a unique range on the edge, for sites
 	// whose LANs overlap. Empty means no remapping.
 	VirtualPrefix string `yaml:"virtual_prefix"`
-	Keepalive     int    `yaml:"keepalive"`
-	PublicKey     string `yaml:"public_key"`
-	FallbackWS    bool   `yaml:"fallback_ws"`
+	// Table pins a remapped tunnel's routing table and fwmark, so adding or
+	// removing another tunnel never renumbers it. 0: TableBase + the
+	// tunnel's index in sorted name order.
+	Table      int    `yaml:"table,omitempty"`
+	Realm      string `yaml:"realm,omitempty"`
+	Keepalive  int    `yaml:"keepalive"`
+	PublicKey  string `yaml:"public_key"`
+	FallbackWS bool   `yaml:"fallback_ws"`
 	// SiteDNS goes in the generated site config's DNS line. ingressd does not
 	// use it (only edge traffic enters the tunnel), but some importers such
 	// as UniFi's require one. Default 1.1.1.1.
@@ -128,6 +143,11 @@ type Tunnel struct {
 	// connector learns them from this node and links to every edge; this
 	// node never dials them.
 	Siblings []TunnelSibling `yaml:"siblings"`
+	// SmartDNS is a connector site's signed Smart DNS config
+	// (nodeproto.SignedSmartDNS as JSON). The node passes it to the
+	// connector unchanged; it can neither read the VPN configs inside nor
+	// change it without breaking the org signature.
+	SmartDNS string `yaml:"smartdns,omitempty"`
 }
 
 // TunnelSibling is one other node the tunnel's site is attached to.
@@ -140,6 +160,10 @@ type TunnelSibling struct {
 	Transit string `yaml:"transit"`
 	// WSURL is that node's WireGuard-over-WebSocket URL (connector sites).
 	WSURL string `yaml:"ws_url"`
+	// Priority (lower first, default 0) and PoP are passed to connectors,
+	// which prefer edges by priority, then RTT.
+	Priority int    `yaml:"priority,omitempty"`
+	PoP      string `yaml:"pop,omitempty"`
 }
 
 // DefaultSiteDNS is written to site configs when site_dns is unset.
@@ -153,6 +177,7 @@ type Pool struct {
 	Health       *HealthCheck `yaml:"health"`
 	Origins      []Origin     `yaml:"origins"`
 	Fallback     string       `yaml:"fallback"`
+	Realm        string       `yaml:"realm,omitempty"`
 }
 
 type Sticky struct {
@@ -190,6 +215,7 @@ type App struct {
 	Pool   string   `yaml:"pool"`
 	Origin string   `yaml:"origin"`
 	Tunnel string   `yaml:"tunnel"`
+	Realm  string   `yaml:"realm,omitempty"`
 
 	Headers   *Headers   `yaml:"headers"`
 	Proxy     *Proxy     `yaml:"proxy"`

@@ -18,20 +18,11 @@ const (
 )
 
 func (m *Manager) listenRelay(addr string, isTLS bool) (io.Closer, error) {
-	ln, err := net.Listen("tcp4", addr)
+	ln, err := m.listenFn("tcp4", addr)
 	if err != nil {
 		return nil, err
 	}
 	go acceptLoop(ln, func(c net.Conn) { m.handleRelay(c, isTLS) })
-	return ln, nil
-}
-
-func (m *Manager) listenExitRelay(addr string) (io.Closer, error) {
-	ln, err := net.Listen("tcp4", addr)
-	if err != nil {
-		return nil, err
-	}
-	go acceptLoop(ln, m.handleExitRelay)
 	return ln, nil
 }
 
@@ -79,9 +70,9 @@ func peekHost(c net.Conn, isTLS bool) (string, []byte, error) {
 	}
 }
 
-// handleRelay serves one home connection to the relay (:443 or :80 on a
-// listen address): only hostnames of enabled services, only from home
-// sources, only through the service's exit.
+// handleRelay serves one LAN connection to the relay (:443 or :80 on the
+// listen address): only hostnames of enabled services, only from private
+// sources, only through one of the service's exits.
 func (m *Manager) handleRelay(c net.Conn, isTLS bool) {
 	defer c.Close()
 	client := netAddr(c.RemoteAddr())
@@ -107,23 +98,18 @@ func (m *Manager) handleRelay(c net.Conn, isTLS bool) {
 		port = 443
 	}
 	ctx, cancel := context.WithTimeout(m.ctx(), queryTimeout+dialTimeout*2)
-	a, rcode, _, err := m.lookup(ctx, st, r, host)
-	if err == nil && (rcode != 0 || len(a.Addrs) == 0) {
-		err = fmt.Errorf("no A records for %s at exit %s", host, r.Exit)
-	}
-	var up net.Conn
-	if err == nil {
-		up, err = m.openUpstream(ctx, st, r, host, a.Addrs, port)
-	}
+	up, exit, err := m.connectUpstream(ctx, st, r, host, port)
 	cancel()
 	if err != nil {
-		m.errors.Add(1)
-		m.log.Warn("relay failed", "host", host, "service", r.Service, "exit", r.Exit, "err", err)
+		m.err.Add(1)
+		m.log.Warn("relay failed", "host", host, "service", r.Service, "exit", exit, "err", err)
 		return
 	}
 	defer up.Close()
 	ctr := m.counter(r.Service)
 	ctr.conns.Add(1)
+	// From here on the stream is committed to this exit: once a client
+	// byte went upstream, a retry elsewhere could replay a request.
 	if _, err := up.Write(head); err != nil {
 		return
 	}
@@ -131,98 +117,101 @@ func (m *Manager) handleRelay(c net.Conn, isTLS bool) {
 	pipe(c, up, &ctr.bytes)
 }
 
-// openUpstream connects to the destination through the route's exit.
-func (m *Manager) openUpstream(ctx context.Context, st *state, r route, host string, addrs []netip.Addr, port int) (net.Conn, error) {
-	ex, ok := st.exit(r.Exit)
-	if !ok {
-		return nil, fmt.Errorf("unknown exit %q", r.Exit)
-	}
-	if ex.IsSelf() {
-		e, ok := st.egress[r.Exit]
-		if !ok {
-			return nil, fmt.Errorf("exit %q not configured", r.Exit)
+// connectUpstream resolves host and connects to it through the service's
+// active exit. When that exit turns out to be down before any client byte
+// was sent (tunnel failure, or a refusal saying the exit is down), it is
+// marked down and the next exit is tried, at most once per exit.
+func (m *Manager) connectUpstream(ctx context.Context, st *state, r route, host string, port int) (net.Conn, string, error) {
+	tried := map[string]bool{}
+	var lastErr error
+	for {
+		a, rcode, _, exit, err := m.lookup(ctx, st, r, host)
+		if err != nil {
+			return nil, exit, err
 		}
-		c, _, err := m.dialOrdered(ctx, e, host, addrs, port)
-		return c, err
+		if tried[exit] {
+			return nil, exit, lastErr
+		}
+		tried[exit] = true
+		if rcode != 0 || len(a.Addrs) == 0 {
+			return nil, exit, fmt.Errorf("no A records for %s at exit %s", host, exit)
+		}
+		c, retry, err := m.openUpstream(ctx, st, r.Service, exit, host, a.Addrs, port)
+		if err == nil {
+			return c, exit, nil
+		}
+		if !retry || ctx.Err() != nil {
+			return nil, exit, err
+		}
+		m.log.Info("relay: exit down before any byte was sent; trying the next exit", "host", host, "service", r.Service, "exit", exit, "err", err)
+		lastErr = err
 	}
-	c, err := m.remote.Connect(ctx, ex.Node, ConnectRequest{Exit: r.Exit, Service: r.Service, Host: host, Port: port, Addrs: addrs})
+}
+
+// openUpstream connects to the destination through exit. retry reports
+// that the exit itself is down (and is now marked so).
+func (m *Manager) openUpstream(ctx context.Context, st *state, service, exit, host string, addrs []netip.Addr, port int) (c net.Conn, retry bool, err error) {
+	ex, ok := st.exit(exit)
+	if !ok {
+		return nil, false, fmt.Errorf("unknown exit %q", exit)
+	}
+	if ex.Egress != nil {
+		e, ok := st.egress[exit]
+		if !ok {
+			return nil, false, fmt.Errorf("exit %q not configured", exit)
+		}
+		c, _, err := dialOrdered(ctx, e, m.edges, host, addrs, port)
+		return c, errors.Is(err, errExitDown), err
+	}
+	if m.remote == nil {
+		return nil, true, fmt.Errorf("%w: no tunnel to exit node %s", errExitDown, ex.Node)
+	}
+	c, err = m.remote.Connect(ctx, ex.Node, ConnectRequest{Exit: exit, Service: service, Host: host, Port: port, Addrs: addrs})
 	if err != nil {
 		var refused *relayRefused
 		if !errors.As(err, &refused) {
-			m.remote.MarkDown(ex.Node, err)
+			m.setRemoteDown(exit, true, err.Error())
+			return nil, true, err
 		}
-		return nil, err
+		if refused.exitDown {
+			m.setRemoteDown(exit, true, refused.msg)
+			return nil, true, err
+		}
+		return nil, false, err
 	}
-	return c, nil
+	return c, false, nil
 }
 
-// dialOrdered connects from a self exit, trying edges best first.
-func (m *Manager) dialOrdered(ctx context.Context, e *egress, host string, addrs []netip.Addr, port int) (net.Conn, netip.Addr, error) {
+// dialOrdered connects from a local egress, trying CDN edges best first.
+func dialOrdered(ctx context.Context, e *egress, edges *edgeChecker, host string, addrs []netip.Addr, port int) (net.Conn, netip.Addr, error) {
 	if up, msg := e.up(); !up {
 		return nil, netip.Addr{}, fmt.Errorf("%w: %s", errExitDown, msg)
 	}
-	return e.dial(ctx, m.edges.order(ctx, e, host, addrs), port)
-}
-
-// handleExitRelay serves one relayed stream from a mesh peer on an exit node.
-func (m *Manager) handleExitRelay(c net.Conn) {
-	defer c.Close()
-	peer, ok := m.mesh.PeerByAddr(netAddr(c.RemoteAddr()))
-	if !ok {
-		return
-	}
-	c.SetDeadline(time.Now().Add(peekTimeout))
-	req, err := ReadConnectRequest(c)
-	if err != nil {
-		return
-	}
-	refuse := func(msg string) {
-		WriteConnectResponse(c, ConnectResponse{Error: msg})
-		m.log.Warn("exit relay refused", "peer", peer, "exit", req.Exit, "host", req.Host, "reason", msg)
-	}
-	e, ok := m.state().egress[req.Exit]
-	if !ok {
-		refuse(fmt.Sprintf("exit %q is not hosted on this node", req.Exit))
-		return
-	}
-	if err := checkConnect(req); err != nil {
-		refuse(err.Error())
-		return
-	}
-	ctx, cancel := context.WithTimeout(m.ctx(), dialTimeout*2+probeTimeout)
-	up, addr, err := m.dialOrdered(ctx, e, normalize(req.Host), req.Addrs, req.Port)
-	cancel()
-	if err != nil {
-		refuse(err.Error())
-		return
-	}
-	defer up.Close()
-	if err := WriteConnectResponse(c, ConnectResponse{OK: true, Addr: addr.String()}); err != nil {
-		return
-	}
-	c.SetDeadline(time.Time{})
-	pipe(c, up, nil)
+	return e.dial(ctx, edges.order(ctx, e, host, addrs), port)
 }
 
 type counterAdder interface{ Add(int64) int64 }
 
-// pipe copies both ways until both directions finish, counting bytes.
+// pipe copies both ways until both directions finish. Without a counter it
+// uses io.Copy, which splices between two kernel TCP sockets.
 func pipe(a, b net.Conn, count counterAdder) {
 	done := make(chan struct{}, 2)
 	cp := func(dst, src net.Conn) {
-		buf := make([]byte, relayBuf)
-		for {
-			n, err := src.Read(buf)
-			if n > 0 {
-				if _, werr := dst.Write(buf[:n]); werr != nil {
-					break
-				}
-				if count != nil {
+		if count == nil {
+			_, _ = io.Copy(dst, src)
+		} else {
+			buf := make([]byte, relayBuf)
+			for {
+				n, err := src.Read(buf)
+				if n > 0 {
+					if _, werr := dst.Write(buf[:n]); werr != nil {
+						break
+					}
 					count.Add(int64(n))
 				}
-			}
-			if err != nil {
-				break
+				if err != nil {
+					break
+				}
 			}
 		}
 		if tc, ok := dst.(interface{ CloseWrite() error }); ok {

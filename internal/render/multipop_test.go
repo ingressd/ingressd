@@ -11,8 +11,7 @@ import (
 )
 
 // A multi-PoP attachment: a /30 from 100.64.0.0/10 (edge .1, site .2),
-// siblings that this node never configures, and the Smart DNS resolver on
-// the edge address.
+// siblings that this node never configures.
 const multiPopConfig = `
 version: 1
 tunnels:
@@ -24,8 +23,6 @@ tunnels:
     siblings:
       - { node: nod_b, endpoint: "node-b.example.net:51822", edge_public_key: "` + sdKey + `", transit: 100.64.0.8/30 }
   lab: { site: router, listen_port: 51824, transit: 100.64.0.68/30 }
-smartdns:
-  enabled: true
 `
 
 func TestRenderMultiPopTransit(t *testing.T) {
@@ -54,8 +51,6 @@ func TestRenderMultiPopTransit(t *testing.T) {
 	}
 	for _, want := range []string{
 		"udp dport { 443, 51823, 51824 } accept",
-		`iifname "ix-home" ip daddr 100.64.0.5 meta l4proto { tcp, udp } th dport 53 accept`,
-		`iifname "ix-lab" ip daddr 100.64.0.69 meta l4proto { tcp, udp } th dport 53 accept`,
 		`iifname "ix-home" ip saddr 100.64.0.6 ip daddr 100.64.0.5 tcp dport 51819 accept`,
 	} {
 		if !strings.Contains(p.NFT, want) {

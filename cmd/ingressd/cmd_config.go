@@ -144,7 +144,7 @@ func (e *env) prepareApply(cfg *config.Config, st *secrets.Store, dryRun bool) (
 	if changed, err = ensureAccessKeys(cfg, st, changed); err != nil {
 		return false, err
 	}
-	if changed, err = ensureSmartDNSKeys(cfg, st, changed); err != nil {
+	if changed, err = ensureMeshKey(cfg, st, changed); err != nil {
 		return false, err
 	}
 	if err := pki.Ensure(cfg, st, pki.EnsureOptions{ConfigDir: e.configDir, StateDir: e.stateDir, DryRun: dryRun}); err != nil {

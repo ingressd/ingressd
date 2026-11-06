@@ -20,6 +20,7 @@ import (
 
 	"github.com/ingressd/ingressd/internal/connector"
 	"github.com/ingressd/ingressd/internal/connector/proto"
+	"github.com/ingressd/ingressd/internal/nodeagent"
 	"github.com/ingressd/ingressd/internal/secrets"
 	"github.com/ingressd/ingressd/internal/tunnel"
 	"github.com/ingressd/ingressd/pkg/config"
@@ -42,6 +43,18 @@ var (
 func connectorServer(e *env) *connector.Server {
 	connOnce.Do(func() {
 		connector.DefaultHost = e.machineHost
+		connector.DefaultPanelURL = func() string {
+			if st, err := nodeagent.LoadState(e.stateDir); err == nil {
+				return st.PanelURL
+			}
+			return ""
+		}
+		connector.DefaultNodeID = func() string {
+			if st, err := nodeagent.LoadState(e.stateDir); err == nil {
+				return st.NodeID
+			}
+			return ""
+		}
 		connSrv = &connector.Server{
 			Store: connector.NewStore(e.stateDir),
 			Log:   slog.New(slog.NewTextHandler(os.Stderr, nil)),
@@ -96,7 +109,7 @@ func newEnrollTokenCmd(e *env) *cobra.Command {
 			if t.Site != config.SiteConnector {
 				return fmt.Errorf("tunnel %q is a %s site; set site: connector to use ingressd-connector", name, t.Site)
 			}
-			host := cfg.Edge.Admin.Hostname
+			host := cmp.Or(cfg.Edge.Admin.Hostname, e.machineHost(), cfg.MachineHostFallback())
 			if host == "" {
 				return fmt.Errorf("edge.admin.hostname must be set: connectors enroll through it")
 			}
@@ -118,7 +131,7 @@ func newEnrollTokenCmd(e *env) *cobra.Command {
 	f := cmd.Flags()
 	f.BoolVar(&join, "join", false, "print a join string (edge URL, token and optional CA) instead of the bare token")
 	f.StringVar(&caFile, "ca", "", "with --join: PEM file of the CA the edge certificate chains to (pinned by the connector)")
-	f.StringVar(&edgeURL, "url", "", "with --join: edge URL (default https://<edge.admin.hostname>)")
+	f.StringVar(&edgeURL, "url", "", "with --join: edge URL (default https://<edge.admin.hostname>, else the node's own host)")
 	return cmd
 }
 

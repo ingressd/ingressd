@@ -49,6 +49,16 @@ const CapabilityAccessPasskey = "access-passkey"
 // it to nodes that advertise this.
 const CapabilitySmartDNSChecks = "smartdns-checks"
 
+// CapabilitySmartDNSFailover is listed by nodes that load
+// smartdns.services.<name>.exits (ordered exits with failover) and
+// smartdns.failback_after. Older nodes reject those fields, so the panel
+// sends them only exit: <first exit>.
+const CapabilitySmartDNSFailover = "smartdns-failover"
+
+// CapabilitySSHAllow is listed by nodes that load security.ssh_allow; older
+// nodes reject the field.
+const CapabilitySSHAllow = "ssh-allow"
+
 // AuthOTPStart asks the panel to email a one-time code. The node only
 // sends it for emails that could satisfy the policy and after its own rate
 // limits passed; the panel applies its limits again (per email, per client

@@ -234,7 +234,13 @@ func (a *Agent) usageLoop(ctx context.Context) {
 }
 
 func (a *Agent) collectUsage(send bool) {
-	c := collector{smart: hookServiceUsage()}
+	var c collector
+	if a.o.Connectors != nil && a.o.Connectors.Store != nil {
+		var err error
+		if c.smart, err = a.o.Connectors.Store.TakeSmartDNSUsage(); err != nil {
+			a.log.Warn("reading connector Smart DNS usage", "err", err)
+		}
+	}
 	c.cfg, _ = a.loadConfig()
 	if a.o.Logs != nil {
 		c.hosts = a.o.Logs.TakeUsage()

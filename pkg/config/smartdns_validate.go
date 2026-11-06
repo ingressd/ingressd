@@ -3,25 +3,29 @@
 package config
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
-	"hash/fnv"
 	"net"
 	"net/netip"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
-	// SmartDNSRelayTLSPort and SmartDNSRelayHTTPPort are where the relay
-	// listens on each listen address; nftables redirects :443 and :80 there,
-	// so the relay never competes with the edge proxy for those ports.
-	SmartDNSRelayTLSPort  = 51443
-	SmartDNSRelayHTTPPort = 51080
-	// MaxVPNExitNameLen is the longest exit name used verbatim in its VPN
-	// interface name (VPNInterfaceName); longer names are hashed.
-	MaxVPNExitNameLen = 10
+	// MaxSmartDNSServiceExits caps a service's exit list.
+	MaxSmartDNSServiceExits = 4
+	// DefaultSmartDNSFailbackAfter and MaxSmartDNSFailbackAfter bound
+	// failback_after.
+	DefaultSmartDNSFailbackAfter = 5 * time.Minute
+	MaxSmartDNSFailbackAfter     = time.Hour
+	// MaxTunnelSmartDNS bounds a tunnel's signed Smart DNS config.
+	MaxTunnelSmartDNS = 256 << 10
+	// MaxExitVPNConfig bounds an encrypted VPN config.
+	MaxExitVPNConfig = 16 << 10
 )
 
 // DefaultSmartDNSUpstream resolves names that no service routes.
@@ -30,72 +34,21 @@ var DefaultSmartDNSUpstream = []string{"1.1.1.1", "9.9.9.9"}
 var (
 	exitCountryRe = regexp.MustCompile(`^[A-Z]{2}$`)
 	secretRefRe   = regexp.MustCompile(`^secret://[a-z0-9][a-z0-9_-]{0,63}$`)
+	checkPathRe   = regexp.MustCompile(`^/[\x21-\x7e]*$`)
+	checkTokenRe  = regexp.MustCompile(`^[A-Za-z0-9_]{1,64}$`)
+	siteNameRe    = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,62}$`)
 )
-
-// VPNInterfaceName is the WireGuard interface an exit's VPN uses:
-// "ix-x-<exit>" when that fits Linux's 15-byte limit, otherwise the first
-// four characters of the name and a hash of the whole name
-// ("ix-x-prot-3fa9c1" style, always 15 bytes), so panel exit names of any
-// length (one node can host several VPN exits) get stable, distinct
-// interfaces.
-func VPNInterfaceName(exit string) string {
-	if len(exit) <= MaxVPNExitNameLen {
-		return "ix-x-" + exit
-	}
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(exit)) // hash.Hash.Write never returns an error
-	return fmt.Sprintf("ix-x-%s-%05x", strings.TrimRight(exit[:4], "-"), h.Sum32()&0xfffff)
-}
-
-// IsEnabled reports whether a service is enabled (default true).
-func (s SmartDNSService) IsEnabled() bool { return s.Enabled == nil || *s.Enabled }
-
-// IsSelf reports whether this node egresses for the exit.
-func (e SmartDNSExit) IsSelf() bool { return e.Node == ExitSelf }
 
 func (c *Config) applySmartDNSDefaults() {
 	c.applyMeshDefaults()
-	s := c.SmartDNS
-	if s == nil {
+	if c.SmartDNS == nil || c.SmartDNS.Exit == nil {
 		return
 	}
-	if len(s.Upstream) == 0 {
-		s.Upstream = slices.Clone(DefaultSmartDNSUpstream)
+	e := c.SmartDNS.Exit
+	e.Country = strings.ToUpper(strings.TrimSpace(e.Country))
+	if len(e.Upstream) == 0 {
+		e.Upstream = slices.Clone(DefaultSmartDNSUpstream)
 	}
-	for name, svc := range s.Services {
-		for i, d := range svc.Domains {
-			svc.Domains[i] = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(d)), ".")
-		}
-		s.Services[name] = svc
-	}
-	for name, e := range s.Exits {
-		e.Country = strings.ToUpper(e.Country)
-		s.Exits[name] = e
-	}
-}
-
-// SmartDNSListen returns the addresses the resolver and relay bind: the
-// configured ones, or by default every tunnel's edge transit address.
-func (c *Config) SmartDNSListen() []netip.Addr {
-	if c.SmartDNS == nil || !c.SmartDNS.Enabled {
-		return nil
-	}
-	var out []netip.Addr
-	if len(c.SmartDNS.Listen) > 0 {
-		for _, s := range c.SmartDNS.Listen {
-			if a, err := netip.ParseAddr(s); err == nil {
-				out = append(out, a)
-			}
-		}
-	} else {
-		for _, name := range sortedKeys(c.Tunnels) {
-			if a, ok := c.TransitEdgeAddr(name); ok {
-				out = append(out, a)
-			}
-		}
-	}
-	slices.SortFunc(out, func(a, b netip.Addr) int { return a.Compare(b) })
-	return slices.Compact(out)
 }
 
 // TransitEdgeAddr is the edge's own address in a tunnel's transit network
@@ -112,114 +65,214 @@ func (c *Config) TransitEdgeAddr(tunnel string) (netip.Addr, bool) {
 	return p.Masked().Addr().Next(), true
 }
 
-// VPNExits returns the names of exits this node egresses for through a VPN,
-// sorted (their index picks the routing table, see VPNTable).
-func (c *Config) VPNExits() []string {
-	if c.SmartDNS == nil {
+// TransitSiteAddr is the site's address in a tunnel's transit network (the
+// second host).
+func (c *Config) TransitSiteAddr(tunnel string) (netip.Addr, bool) {
+	a, ok := c.TransitEdgeAddr(tunnel)
+	if !ok {
+		return netip.Addr{}, false
+	}
+	return a.Next(), true
+}
+
+// SmartDNSExitSites returns the tunnels allowed to use this node's exit
+// that exist on the node, sorted.
+func (c *Config) SmartDNSExitSites() []string {
+	if c.SmartDNS == nil || c.SmartDNS.Exit == nil {
 		return nil
 	}
 	var out []string
-	for _, name := range sortedKeys(c.SmartDNS.Exits) {
-		if e := c.SmartDNS.Exits[name]; e.IsSelf() && e.VPN != "" {
-			out = append(out, name)
+	for _, s := range c.SmartDNS.Exit.Sites {
+		if _, ok := c.Tunnels[s]; ok {
+			out = append(out, s)
 		}
 	}
-	return out
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 func (c *Config) validateSmartDNS(v *validator) {
-	s := c.SmartDNS
-	if s == nil {
-		return
-	}
-	transits := map[netip.Addr]bool{}
 	for _, name := range sortedKeys(c.Tunnels) {
-		if a, ok := c.TransitEdgeAddr(name); ok {
-			transits[a] = true
-		}
-	}
-	meshAddr := netip.Addr{}
-	if p, ok := c.Mesh.MeshPrefix(); ok {
-		meshAddr = p.Addr()
-	}
-	seen := map[netip.Addr]bool{}
-	for i, l := range s.Listen {
-		p := fmt.Sprintf("smartdns.listen[%d]", i)
-		a, err := netip.ParseAddr(l)
-		switch {
-		case err != nil || !a.Is4():
-			v.add(p, "must be an IPv4 address, got %q", l)
+		t := c.Tunnels[name]
+		if t.SmartDNS == "" {
 			continue
-		case seen[a]:
-			v.add(p, "duplicate address %s", a)
-		case a == meshAddr:
-			v.add(p, "%s is the mesh address; the resolver must listen on tunnel transit or LAN addresses", a)
-		case transits[a]:
-		case a.IsPrivate() || cgnat.Contains(a):
-			// An explicitly allowed private (LAN) address.
-		default:
-			v.add(p, "%s is neither a tunnel transit address nor a private address; the resolver must never listen on public interfaces", a)
 		}
-		seen[a] = true
-	}
-	for i, u := range s.Upstream {
-		if !validUpstream(u) {
-			v.add(fmt.Sprintf("smartdns.upstream[%d]", i), "must be an IP address or IP:port, got %q", u)
+		p := "tunnels." + name + ".smartdns"
+		switch {
+		case t.Site != SiteConnector:
+			v.add(p, "only connector sites run Smart DNS")
+		case len(t.SmartDNS) > MaxTunnelSmartDNS:
+			v.add(p, "is larger than %d bytes", MaxTunnelSmartDNS)
+		case !json.Valid([]byte(t.SmartDNS)):
+			v.add(p, "must be a signed Smart DNS config (JSON)")
 		}
 	}
 
+	if c.SmartDNS == nil || c.SmartDNS.Exit == nil {
+		return
+	}
+	e := c.SmartDNS.Exit
+	p := "smartdns.exit"
+	if len(c.Realms) > 0 {
+		v.add(p, "is not allowed alongside realms (shared nodes host no exits)")
+	}
+	if !exitCountryRe.MatchString(e.Country) {
+		v.add(p+".country", "must be an ISO 3166-1 alpha-2 country code, got %q", e.Country)
+	}
+	if len(e.Sites) == 0 {
+		v.add(p+".sites", "at least one connector site is required")
+	}
+	for i, s := range e.Sites {
+		sp := fmt.Sprintf("%s.sites[%d]", p, i)
+		t, ok := c.Tunnels[s]
+		switch {
+		case !ok:
+			v.add(sp, "unknown tunnel %q", s)
+		case t.Site != SiteConnector:
+			v.add(sp, "tunnel %q is not a connector site", s)
+		}
+	}
+	for i, u := range e.Upstream {
+		if !validUpstream(u) {
+			v.add(fmt.Sprintf("%s.upstream[%d]", p, i), "must be an IP address or IP:port, got %q", u)
+		}
+	}
+	validateChecks(v, p, e.Checks)
+}
+
+func validateChecks(v *validator, p string, checks []SmartDNSCheck) {
+	for i, ck := range checks {
+		cp := fmt.Sprintf("%s.checks[%d]", p, i)
+		if len(ck.Domains) == 0 {
+			v.add(cp+".domains", "at least one domain is required")
+		}
+		for j, d := range ck.Domains {
+			if !validHostname(d, false) {
+				v.add(fmt.Sprintf("%s.domains[%d]", cp, j), "invalid domain %q", d)
+			}
+		}
+		if !validHostname(ck.Host, false) {
+			v.add(cp+".host", "must be a hostname, got %q", ck.Host)
+		}
+		// Path and host go into a raw HTTP request line.
+		if !checkPathRe.MatchString(ck.Path) {
+			v.add(cp+".path", "must start with / and contain no spaces or control characters, got %q", ck.Path)
+		}
+		if !checkTokenRe.MatchString(ck.Field) {
+			v.add(cp+".field", "must match %s, got %q", checkTokenRe, ck.Field)
+		}
+		if ck.CacheBuster != "" && !checkTokenRe.MatchString(ck.CacheBuster) {
+			v.add(cp+".cache_buster", "must match %s, got %q", checkTokenRe, ck.CacheBuster)
+		}
+	}
+}
+
+// Normalize lower-cases domains, upper-cases countries and fills in the
+// default upstreams.
+func (s *SmartDNSSite) Normalize() {
+	if len(s.Upstream) == 0 {
+		s.Upstream = slices.Clone(DefaultSmartDNSUpstream)
+	}
+	for name, svc := range s.Services {
+		for i, d := range svc.Domains {
+			svc.Domains[i] = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(d)), ".")
+		}
+		s.Services[name] = svc
+	}
+	for name, e := range s.Exits {
+		e.Country = strings.ToUpper(strings.TrimSpace(e.Country))
+		s.Exits[name] = e
+	}
+}
+
+// FailbackDuration is FailbackAfter with its default applied (an invalid
+// value is refused by Validate).
+func (s *SmartDNSSite) FailbackDuration() time.Duration {
+	if s.FailbackAfter == "" {
+		return DefaultSmartDNSFailbackAfter
+	}
+	d, err := time.ParseDuration(s.FailbackAfter)
+	if err != nil {
+		return DefaultSmartDNSFailbackAfter
+	}
+	return d
+}
+
+// ListenAddr returns the configured listen address (invalid when unset).
+func (s *SmartDNSSite) ListenAddr() netip.Addr {
+	a, _ := netip.ParseAddr(s.Listen)
+	return a
+}
+
+// Validate checks a connector site's Smart DNS config (call Normalize
+// first).
+func (s *SmartDNSSite) Validate() error {
+	v := &validator{}
+	if s.Listen != "" {
+		a, err := netip.ParseAddr(s.Listen)
+		switch {
+		case err != nil || !a.Is4():
+			v.add("listen", "must be an IPv4 address, got %q", s.Listen)
+		case !a.IsPrivate() && !a.IsLoopback() && !cgnat.Contains(a):
+			v.add("listen", "%s is not a private address; the resolver must never listen on public interfaces", a)
+		}
+	}
+	for i, u := range s.Upstream {
+		if !validUpstream(u) {
+			v.add(fmt.Sprintf("upstream[%d]", i), "must be an IP address or IP:port, got %q", u)
+		}
+	}
+	if s.FailbackAfter != "" {
+		d, err := time.ParseDuration(s.FailbackAfter)
+		if err != nil || d < 0 || d > MaxSmartDNSFailbackAfter {
+			v.add("failback_after", "must be a duration between 0s and %s, got %q", MaxSmartDNSFailbackAfter, s.FailbackAfter)
+		}
+	}
+	nodes := map[string]string{}
 	for _, name := range sortedKeys(s.Exits) {
 		e := s.Exits[name]
-		p := "smartdns.exits." + name
-		if !nameRe.MatchString(name) {
-			v.add(p, "name must match %s", nameRe)
-		}
-		switch {
-		case e.Node == "":
-			v.add(p+".node", "is required (self or a mesh peer id)")
-		case e.IsSelf():
-		case c.Mesh == nil:
-			v.add(p+".node", "exit on node %q needs the mesh section", e.Node)
-		default:
-			if _, ok := c.Mesh.Peers[e.Node]; !ok {
-				v.add(p+".node", "unknown mesh peer %q (expected self or one of mesh.peers)", e.Node)
-			}
+		p := "exits." + name
+		if !siteNameRe.MatchString(name) {
+			v.add(p, "name must match %s", siteNameRe)
 		}
 		if !exitCountryRe.MatchString(e.Country) {
 			v.add(p+".country", "must be an ISO 3166-1 alpha-2 country code, got %q", e.Country)
 		}
-		if e.VPN != "" {
-			if !secretRefRe.MatchString(e.VPN) {
-				v.add(p+".vpn", "must be a secret reference secret://name, got %q", e.VPN)
+		switch e.At {
+		case ExitAtConnector:
+			switch {
+			case e.VPN == "":
+				v.add(p+".vpn", "is required for a connector exit")
+			case len(e.VPN) > MaxExitVPNConfig:
+				v.add(p+".vpn", "is larger than %d bytes", MaxExitVPNConfig)
 			}
-			if e.IsSelf() {
-				ifname := VPNInterfaceName(name)
-				for _, t := range sortedKeys(c.Tunnels) {
-					if InterfaceName(t) == ifname {
-						v.add(p, "interface %q is already used by tunnel %q", ifname, t)
-					}
-				}
-				for _, other := range sortedKeys(s.Exits) {
-					if o := s.Exits[other]; other < name && o.IsSelf() && o.VPN != "" && VPNInterfaceName(other) == ifname {
-						v.add(p, "interface %q is already used by exit %q; rename one of them", ifname, other)
-					}
-				}
+			if e.Node != "" {
+				v.add(p+".node", "only applies to a node exit")
 			}
+		case ExitAtNode:
+			if !meshPeerIDRe.MatchString(e.Node) {
+				v.add(p+".node", "must be a node id, got %q", e.Node)
+			} else if other, dup := nodes[e.Node]; dup {
+				v.add(p+".node", "node %s is already exit %q (a node has one exit)", e.Node, other)
+			}
+			nodes[e.Node] = name
+			if e.VPN != "" {
+				v.add(p+".vpn", "nodes egress from their own IP; VPNs run on the connector only")
+			}
+		case ExitAtOperator:
+			v.add(p+".at", "operator exits are not offered")
+		default:
+			v.add(p+".at", "must be %s or %s, got %q", ExitAtConnector, ExitAtNode, e.At)
 		}
 	}
-
 	owners := map[string]string{}
 	for _, name := range sortedKeys(s.Services) {
 		svc := s.Services[name]
-		p := "smartdns.services." + name
-		if !nameRe.MatchString(name) {
-			v.add(p, "name must match %s", nameRe)
+		p := "services." + name
+		if !siteNameRe.MatchString(name) {
+			v.add(p, "name must match %s", siteNameRe)
 		}
-		if svc.Exit == "" {
-			v.add(p+".exit", "is required")
-		} else if _, ok := s.Exits[svc.Exit]; !ok {
-			v.add(p+".exit", "unknown exit %q", svc.Exit)
-		}
+		s.validateServiceExits(v, p, svc)
 		if len(svc.Domains) == 0 {
 			v.add(p+".domains", "at least one domain is required")
 		}
@@ -239,37 +292,41 @@ func (c *Config) validateSmartDNS(v *validator) {
 			}
 		}
 	}
+	validateChecks(v, "checks", s.Checks)
+	return errors.Join(v.errs...)
+}
 
-	for i, c := range s.Checks {
-		p := fmt.Sprintf("smartdns.checks[%d]", i)
-		if len(c.Domains) == 0 {
-			v.add(p+".domains", "at least one domain is required")
+// validateServiceExits: 1 to 4 known, distinct exits, all of one country,
+// so failing over never changes where the service appears to be.
+func (s *SmartDNSSite) validateServiceExits(v *validator, p string, svc SmartDNSSiteService) {
+	switch {
+	case len(svc.Exits) == 0:
+		v.add(p+".exits", "is required")
+		return
+	case len(svc.Exits) > MaxSmartDNSServiceExits:
+		v.add(p+".exits", "at most %d exits, got %d", MaxSmartDNSServiceExits, len(svc.Exits))
+	}
+	seen := map[string]bool{}
+	first := ""
+	for i, name := range svc.Exits {
+		ep := fmt.Sprintf("%s.exits[%d]", p, i)
+		if seen[name] {
+			v.add(ep, "duplicate exit %q", name)
+			continue
 		}
-		for j, d := range c.Domains {
-			if !validHostname(d, false) {
-				v.add(fmt.Sprintf("%s.domains[%d]", p, j), "invalid domain %q", d)
-			}
+		seen[name] = true
+		ex, ok := s.Exits[name]
+		if !ok {
+			v.add(ep, "unknown exit %q", name)
+			continue
 		}
-		if !validHostname(c.Host, false) {
-			v.add(p+".host", "must be a hostname, got %q", c.Host)
-		}
-		// Path and host go into a raw HTTP request line.
-		if !checkPathRe.MatchString(c.Path) {
-			v.add(p+".path", "must start with / and contain no spaces or control characters, got %q", c.Path)
-		}
-		if !checkTokenRe.MatchString(c.Field) {
-			v.add(p+".field", "must match %s, got %q", checkTokenRe, c.Field)
-		}
-		if c.CacheBuster != "" && !checkTokenRe.MatchString(c.CacheBuster) {
-			v.add(p+".cache_buster", "must match %s, got %q", checkTokenRe, c.CacheBuster)
+		if i == 0 {
+			first = ex.Country
+		} else if first != "" && ex.Country != first {
+			v.add(ep, "country %s differs from %s of exits[0]", ex.Country, first)
 		}
 	}
 }
-
-var (
-	checkPathRe  = regexp.MustCompile(`^/[\x21-\x7e]*$`)
-	checkTokenRe = regexp.MustCompile(`^[A-Za-z0-9_]{1,64}$`)
-)
 
 func validUpstream(s string) bool {
 	if a, err := netip.ParseAddr(s); err == nil {

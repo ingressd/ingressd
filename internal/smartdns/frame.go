@@ -11,16 +11,16 @@ import (
 	"net/netip"
 )
 
-// The mesh relay protocol. A home node opens a TCP connection to the exit
-// node's mesh address on config.MeshRelayPort and sends one request frame;
-// the exit answers with one response frame and, if OK, both sides then copy
+// The exit relay protocol. A connector opens a TCP connection over its
+// tunnel to the exit node's edge transit address on
+// config.SmartDNSExitRelayPort and sends one request frame; the exit answers with one response frame and, if OK, both sides then copy
 // raw bytes (the client's TLS or HTTP stream, untouched) until EOF.
 //
 //	request:  "HER1" | uint16 length | JSON ConnectRequest
 //	response:          uint16 length | JSON ConnectResponse
 //
-// The exit accepts connections only from mesh peers (WireGuard
-// authenticates their source address) and only to public unicast addresses
+// The exit accepts connections only from the site address of a tunnel it
+// serves (WireGuard authenticates the source) and only to public unicast addresses
 // on ports 80 and 443.
 
 var relayMagic = [4]byte{'H', 'E', 'R', '1'}
@@ -29,7 +29,7 @@ const maxFrame = 4096
 
 // ConnectRequest asks an exit to open a stream.
 type ConnectRequest struct {
-	Exit    string       `json:"exit"`              // exit name, must be a self exit on the exit node
+	Exit    string       `json:"exit"`              // the connector's name for the exit (logs)
 	Service string       `json:"service,omitempty"` // informational (logs)
 	Host    string       `json:"host"`              // SNI / Host of the client's stream
 	Port    int          `json:"port"`              // 443 or 80
@@ -41,6 +41,10 @@ type ConnectResponse struct {
 	OK    bool   `json:"ok"`
 	Addr  string `json:"addr,omitempty"` // upstream address connected to
 	Error string `json:"error,omitempty"`
+	// ExitDown marks a refusal because the exit cannot egress, which the
+	// home node may retry through the service's next exit; any other
+	// refusal is final.
+	ExitDown bool `json:"exit_down,omitempty"`
 }
 
 func writeFrame(w io.Writer, magic bool, v any) error {

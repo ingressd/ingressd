@@ -35,6 +35,14 @@ var TransparentSources func(cfg *config.Config, tunnel string) []string
 // mode: edge-endpoint.json). It is used when edge.admin.hostname is unset.
 var DefaultHost func() string
 
+// DefaultNodeID, if set, returns the node's panel id (managed nodes), sent
+// to connectors so they can name this edge as a Smart DNS exit; standalone
+// nodes send edge.name instead.
+var DefaultNodeID func() string
+
+// DefaultPanelURL, if set, returns the panel managing this node.
+var DefaultPanelURL func() string
+
 // TunnelConfig builds the connector-facing config for a tunnel.
 func TunnelConfig(cfg *config.Config, keys EdgeKeys, name string) (proto.TunnelConfig, error) {
 	t, ok := cfg.Tunnels[name]
@@ -45,9 +53,9 @@ func TunnelConfig(cfg *config.Config, keys EdgeKeys, name string) (proto.TunnelC
 	if err != nil {
 		return proto.TunnelConfig{}, err
 	}
-	machine := ""
+	machine := cfg.MachineHostFallback()
 	if DefaultHost != nil {
-		machine = DefaultHost()
+		machine = cmp.Or(DefaultHost(), machine)
 	}
 	host := cmp.Or(cfg.Edge.Admin.Hostname, machine, cfg.Edge.PublicIPv4)
 	if host == "" {
@@ -59,6 +67,8 @@ func TunnelConfig(cfg *config.Config, keys EdgeKeys, name string) (proto.TunnelC
 	}
 	tc := proto.TunnelConfig{
 		Tunnel:        name,
+		Node:          cmp.Or(nodeID(), cfg.Edge.Name),
+		PanelURL:      panelURL(),
 		EdgePublicKey: pub,
 		Endpoint:      net.JoinHostPort(host, strconv.Itoa(t.ListenPort)),
 		Address:       netip.PrefixFrom(render.SiteAddr(transit), transit.Bits()).String(),
@@ -76,6 +86,9 @@ func TunnelConfig(cfg *config.Config, keys EdgeKeys, name string) (proto.TunnelC
 	}
 	if TransparentSources != nil {
 		tc.Transparent = TransparentSources(cfg, name)
+	}
+	if t.SmartDNS != "" && t.Site == config.SiteConnector {
+		tc.SmartDNS = json.RawMessage(t.SmartDNS)
 	}
 	b, _ := json.Marshal(tc)
 	sum := sha256.Sum256(b)
@@ -129,4 +142,18 @@ func hostPort(addr string) string {
 		}
 	}
 	return net.JoinHostPort(u.Hostname(), port)
+}
+
+func panelURL() string {
+	if DefaultPanelURL == nil {
+		return ""
+	}
+	return DefaultPanelURL()
+}
+
+func nodeID() string {
+	if DefaultNodeID == nil {
+		return ""
+	}
+	return DefaultNodeID()
 }

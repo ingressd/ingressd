@@ -233,3 +233,52 @@ func otherCA(t *testing.T) string {
 	}
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 }
+
+// TestEnrollAlternateEdgeToken falls back to the second edge of a join string
+// and enrols there with that edge's own token.
+func TestEnrollAlternateEdgeToken(t *testing.T) {
+	edge := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req proto.EnrollRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Token != "tok-b" {
+			http.Error(w, "bad token", http.StatusForbidden)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(proto.EnrollResponse{Credential: "cred-b", Config: proto.TunnelConfig{Tunnel: "home", Address: "10.100.1.2/24", Revision: "r1"}})
+	}))
+	defer edge.Close()
+	ca := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: edge.Certificate().Raw}))
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadURL := "https://example.com:" + strconv.Itoa(l.Addr().(*net.TCPAddr).Port)
+	_ = l.Close()
+
+	enroll := func(tokB string) (*State, error) {
+		js, err := proto.EncodeJoin(proto.Join{Token: "tok-top", Edges: []proto.JoinEdge{
+			{URL: deadURL, CA: ca, T: "tok-a"},
+			{URL: edge.URL, CA: ca, T: tokB},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		o := EnrollOptions{Mode: ModeNetstack, EdgeAddr: "127.0.0.1"}
+		if err := o.ApplyJoin(js); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return Enroll(ctx, filepath.Join(t.TempDir(), "connector.json"), o)
+	}
+	st, err := enroll("tok-b")
+	if err != nil {
+		t.Fatalf("enrol via the second edge: %v", err)
+	}
+	if p := st.Primary(); len(st.Edges) != 1 || p.URL != edge.URL || p.Credential != "cred-b" {
+		t.Errorf("state = %+v", st)
+	}
+	if _, err := enroll(""); err == nil || !strings.Contains(err.Error(), "bad token") {
+		t.Errorf("enrol with the top-level token: err = %v, want bad token", err)
+	}
+}

@@ -19,8 +19,15 @@ const ControlHost = "access.ingressd.internal"
 // EdgeConfig is the JSON configuration of the edge_auth Caddy module
 // (edge/modules/edgeauth). Field names are shared with that module.
 type EdgeConfig struct {
-	Handler   string `json:"handler"`
-	App       string `json:"app"`
+	Handler string `json:"handler"`
+	App     string `json:"app"`
+	// Realm scopes the app cookie key and the revocation list to the app's
+	// realm ("" without realms).
+	Realm string `json:"realm,omitempty"`
+	// Audience is the identity assertion's aud when it differs from App:
+	// a realm app named "<realm>.<name>" is "<name>" to its origin, as on
+	// the org's own nodes.
+	Audience  string `json:"audience,omitempty"`
 	PortalURL string `json:"portal_url"`
 	// SessionKey and JWTKey are the stored secrets (see KeyRefs); the
 	// module derives its per-app keys from them.
@@ -96,21 +103,35 @@ type Resolver interface {
 }
 
 // BuildEdgeConfig renders the edge_auth configuration for a protected app.
+// With realms, everything that identifies users (portal, keys, revocations)
+// comes from the app's realm, never from another realm or the node.
 func BuildEdgeConfig(cfg *config.Config, res Resolver, appName, controlSocket string) (*EdgeConfig, error) {
-	keys, err := LoadConfigKeys(cfg, res)
+	app := cfg.Apps[appName]
+	a := cfg.AppAccess(appName)
+	if a == nil {
+		return nil, fmt.Errorf("realm %q has no access settings", app.Realm)
+	}
+	var keys *Keys
+	var err error
+	if len(cfg.Realms) > 0 {
+		keys, err = LoadRealmKeys(cfg, res, app.Realm)
+	} else {
+		keys, err = LoadConfigKeys(cfg, res)
+	}
 	if err != nil {
 		return nil, err
 	}
 	sk, jk := keys.SessionRaw, keys.JWTRaw
-	app := cfg.Apps[appName]
 	eng := NewEngine(cfg)
-	portal := "https://" + cfg.Access.PortalHost
-	if External(cfg) {
-		portal = strings.TrimSuffix(cfg.Access.PortalURL, "/")
+	portal := "https://" + a.PortalHost
+	if a.PortalURL != "" {
+		portal = strings.TrimSuffix(a.PortalURL, "/")
 	}
 	ec := &EdgeConfig{
 		Handler:       "edge_auth",
 		App:           appName,
+		Realm:         keys.Realm(),
+		Audience:      audience(appName, app.Realm),
 		PortalURL:     portal,
 		SessionKey:    sk,
 		JWTKey:        jk,
@@ -206,4 +227,16 @@ func edgeSelectors(cfg *config.Config, sels []config.Selector) []EdgeSelector {
 		out = append(out, es)
 	}
 	return out
+}
+
+// audience is a realm app's name without its realm prefix ("" when the
+// name has none, so aud stays the app's name).
+func audience(appName, realm string) string {
+	if realm == "" {
+		return ""
+	}
+	if n, ok := strings.CutPrefix(appName, realm+"."); ok && n != "" {
+		return n
+	}
+	return ""
 }

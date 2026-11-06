@@ -1,0 +1,72 @@
+{
+  "interfaces": [
+    {
+      "name": "ix-tb4x9p01",
+      "address": "10.100.2.1/30",
+      "listen_port": 51821,
+      "mtu": 1420,
+      "private_key": "EDGE-PRIV-tb4x9p01",
+      "peers": [
+        {
+          "public_key": "SITE-PUB-tb4x9p01",
+          "allowed_ips": [
+            "10.100.2.2/32",
+            "192.168.1.0/24"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "ix-tq7k2m01",
+      "address": "10.100.1.1/30",
+      "listen_port": 51820,
+      "mtu": 1420,
+      "private_key": "EDGE-PRIV-tq7k2m01",
+      "peers": [
+        {
+          "public_key": "SITE-PUB-tq7k2m01",
+          "allowed_ips": [
+            "10.100.1.2/32",
+            "192.168.1.0/24"
+          ]
+        }
+      ]
+    }
+  ],
+  "routes": [
+    {
+      "dst": "10.0.5.0/24",
+      "dev": "ix-tb4x9p01"
+    },
+    {
+      "dst": "192.168.1.0/24",
+      "dev": "ix-tb4x9p01",
+      "table": 1202
+    },
+    {
+      "dst": "10.0.4.0/24",
+      "dev": "ix-tq7k2m01"
+    },
+    {
+      "dst": "192.168.1.0/24",
+      "dev": "ix-tq7k2m01",
+      "table": 1201
+    }
+  ],
+  "rules": [
+    {
+      "priority": 10202,
+      "mark": 1202,
+      "table": 1202
+    },
+    {
+      "priority": 10201,
+      "mark": 1201,
+      "table": 1201
+    }
+  ],
+  "no_rp_filter": [
+    "ix-tb4x9p01",
+    "ix-tq7k2m01"
+  ]
+}

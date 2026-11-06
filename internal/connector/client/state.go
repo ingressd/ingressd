@@ -45,6 +45,20 @@ type State struct {
 	// Edges are the nodes this site is linked to. The first is the one the
 	// connector enrolled with; others are learned from sibling lists.
 	Edges []EdgeState `json:"edges"`
+	// OrgKey is the pinned org public key that signs the Smart DNS config:
+	// from the join string, else the first valid config (trust on first use).
+	OrgKey string `json:"org_key,omitempty"`
+	// AgeIdentity decrypts the connector VPN configs (generated locally;
+	// only its recipient is reported).
+	AgeIdentity string `json:"age_identity,omitempty"`
+	// SmartDNSIssued is the newest Smart DNS config accepted; older ones are
+	// refused, so an edge cannot replay a config.
+	SmartDNSIssued time.Time `json:"smartdns_issued,omitempty"`
+	// SmartDNSConfig is that config (nodeproto.SignedSmartDNS), run at start
+	// whatever the edges say, so Smart DNS never depends on an edge.
+	SmartDNSConfig json.RawMessage `json:"smartdns_config,omitempty"`
+	// RescueIssued is the newest edge list accepted from the panel (rescue.go).
+	RescueIssued time.Time `json:"rescue_issued,omitempty"`
 }
 
 // EdgeState is one edge (node) of the site.
@@ -171,6 +185,9 @@ type EdgeStatus struct {
 	TxBytes       int64     `json:"tx_bytes"`
 	LastPoll      time.Time `json:"last_poll,omitempty"`
 	PollError     string    `json:"poll_error,omitempty"`
+	RTTMillis     float64   `json:"rtt_ms,omitempty"`
+	Priority      int       `json:"priority,omitempty"`
+	PoP           string    `json:"pop,omitempty"`
 }
 
 // Up reports whether the edge has a transport and a recent handshake.

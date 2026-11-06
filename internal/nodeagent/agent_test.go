@@ -441,14 +441,12 @@ func TestNodeAnsweredRequests(t *testing.T) {
 	if env.Type != nodeproto.TypeSmartDNSRecent {
 		t.Errorf("recent reply type %q", env.Type)
 	}
+	var rec nodeproto.SmartDNSRecent
+	if err := env.Decode(&rec); err != nil || rec.Lookups == nil || len(rec.Lookups) != 0 {
+		t.Errorf("recent without a connector = %+v (%v)", rec, err)
+	}
 	SetSmartDNS(fakeSmart{})
 	defer SetSmartDNS(nil)
-	env, _ = h.panel.Request(h.ctx(), nodeproto.TypeSmartDNSRecentRequest, nodeproto.SmartDNSRecentRequest{Limit: 5})
-	var rec nodeproto.SmartDNSRecent
-	_ = env.Decode(&rec)
-	if len(rec.Lookups) != 1 || rec.Lookups[0].Name != "tv.stream.example" {
-		t.Errorf("recent = %+v", rec)
-	}
 	h.wait("exits in status", func(s fakepanel.State) bool { return s.Status != nil && len(s.Status.Exits) == 1 })
 
 	env, _ = h.panel.Request(h.ctx(), nodeproto.TypePing, nil)
@@ -461,9 +459,6 @@ type fakeSmart struct{}
 
 func (fakeSmart) Exits() []nodeproto.ExitStatus {
 	return []nodeproto.ExitStatus{{Name: "uk", Country: "GB", Up: true}}
-}
-func (fakeSmart) RecentLookups(limit int) []nodeproto.RecentLookup {
-	return []nodeproto.RecentLookup{{Name: "tv.stream.example", Type: "A", Routed: true}}
 }
 
 func TestDetachAndReconnect(t *testing.T) {

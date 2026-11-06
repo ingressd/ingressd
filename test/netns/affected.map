@@ -58,21 +58,24 @@ test/netns/logs-stats-e2e.sh             logs-stats
 test/netns/connector-join-e2e.sh         connector-join
 test/netns/multi-edge-e2e.sh             multi-edge
 test/netns/managed-node-e2e.sh           managed-node
-test/netns/smartdns-e2e.sh               smartdns
 test/netns/remote-updates-e2e.sh         remote-updates
-test/netns/smartdns-vpn-exits-e2e.sh     smartdns-vpn-exits
+test/netns/realms-e2e.sh                 realms
+test/netns/realms-shaping-e2e.sh         realms-shaping
+test/netns/pop-forward-e2e.sh            pop-forward
+test/netns/connector-smartdns-e2e.sh     connector-smartdns
 
 # --- Test helpers ---------------------------------------------------------------
-test/netns/sdtool/*               smartdns smartdns-vpn-exits
+test/netns/sdtool/*               connector-smartdns
+test/netns/realmtool/*            realms
 test/fakepanel/*                  managed-node remote-updates
 scripts/releasetool/*             remote-updates
 
 # --- Feature packages (the suites that exercise them) ---------------------------
-internal/smartdns/*               smartdns smartdns-vpn-exits
-internal/mesh/*                   smartdns smartdns-vpn-exits
+internal/smartdns/*               connector-smartdns
+internal/mesh/*                   pop-forward
 internal/l4/*                     l4-forwarding managed-node
-internal/connector/*              connector-transports connector-join multi-edge managed-node remote-updates
-cmd/ingressd-connector/*          connector-transports connector-join multi-edge remote-updates
+internal/connector/*              connector-transports connector-join multi-edge managed-node remote-updates connector-smartdns
+cmd/ingressd-connector/*          connector-transports connector-join multi-edge remote-updates connector-smartdns
 deploy/install-connector.sh       connector-join
 deploy/*                          none
 internal/nodeagent/*              managed-node multi-edge remote-updates
@@ -85,9 +88,10 @@ edge/modules/edgeauth/*           access-login access-idp managed-node
 internal/challenge/*              waf
 edge/modules/edgechallenge/*      waf
 internal/waf/*                    waf
-internal/geoip/*                  waf smartdns smartdns-vpn-exits
-internal/health/*                 load-balancing
+internal/geoip/*                  waf
+internal/health/*                 load-balancing pop-forward
 edge/modules/edgelb/*             load-balancing
+edge/modules/edgeforward/*        pop-forward
 internal/pki/*                    origin-tls connector-join managed-node
 internal/edgecert/*               origin-tls connector-join managed-node
 internal/crawler/*                cache

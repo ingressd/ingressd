@@ -30,7 +30,7 @@ scripts/e2e.sh l4-forwarding managed-node    # by name (test/netns/<name>-e2e.sh
 scripts/e2e.sh --changed [REF]     # affected suites only
 scripts/e2e.sh -j 4 --no-build ... # 4 at a time, binaries already in bin/
 E2E_SERIAL=1 scripts/e2e.sh        # one at a time (under flock /tmp/ingressd-e2e.lock)
-E2E_REPEAT=5 scripts/e2e.sh smartdns-vpn-exits   # flake hunting: 5 concurrent runs
+E2E_REPEAT=5 scripts/e2e.sh connector-join   # flake hunting: 5 concurrent runs
 ```
 
 1. Builds `bin/ingressd`, `ingressd-connector`, `ingressd-edge`,
@@ -111,7 +111,7 @@ import one of those (`scripts/affected.sh packages . | edge`). A change to
 
 `test/netns/*-e2e.sh`, one per feature (the file name says what it covers): real WireGuard, nftables and
 the real binaries in network namespaces on one Linux host (root). ~600
-checks; the slowest suites (connector-join, connector-transports/6, smartdns) take
+checks; the slowest suites (connector-join, connector-transports/6) take
 ~60–70 s each because they wait for real timers (handshakes, health
 checks, failback holds), which is why they run in parallel.
 
@@ -173,7 +173,7 @@ times concurrently: `E2E_REPEAT=8 scripts/e2e.sh <suite>`.
 
 ```
 # <glob>                 <suite>... | all | none   (first match wins)
-internal/smartdns/*      smartdns smartdns-vpn-exits
+internal/smartdns/*      connector-smartdns
 docs/*                   none
 ```
 
@@ -200,6 +200,3 @@ Measured on a development machine (WSL2, 32 cores; checkout on `/mnt/c`):
 | CI, full push (wall) | ~6.8 min (critical path: `go test -race ./...` 6.6 min, `end-to-end build` 4.5 min) | expected ≲ 4 min with warm per-job caches (not yet measured on GitHub) |
 | CI, PR touching one feature package | same as push | plan + affected packages + affected suites only |
 
-smartdns-vpn-exits had a real flake (~1 in 16 runs, also serial): the simulated
-provider move only dropped traffic *to* the old address, and a keepalive
-sent *from* it made the node's peer roam back. Fixed in the suite.

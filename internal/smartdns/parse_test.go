@@ -101,11 +101,11 @@ func TestHostFromHTTP(t *testing.T) {
 
 func TestMatcher(t *testing.T) {
 	off := false
-	m := newMatcher(&config.SmartDNS{Services: map[string]config.SmartDNSService{
-		"streamtv": {Domains: []string{"stream.example", "streamtv.example"}, Exit: "nl"},
-		"video":    {Domains: []string{"video.stream.example"}, Exit: "de"},
-		"off":      {Domains: []string{"disabled.test"}, Exit: "nl", Enabled: &off},
-	}})
+	m := newMatcher(map[string]config.SmartDNSSiteService{
+		"streamtv": {Domains: []string{"stream.example", "streamtv.example"}, Exits: []string{"nl"}},
+		"video":    {Domains: []string{"video.stream.example"}, Exits: []string{"de"}},
+		"off":      {Domains: []string{"disabled.test"}, Exits: []string{"nl"}, Enabled: &off},
+	})
 	for name, want := range map[string]string{
 		"stream.example":              "streamtv/nl",
 		"TV.Stream.EXAMPLE.":          "streamtv/nl",
@@ -120,7 +120,7 @@ func TestMatcher(t *testing.T) {
 		r, ok := m.match(name)
 		got := ""
 		if ok {
-			got = r.Service + "/" + r.Exit
+			got = r.Service + "/" + strings.Join(r.Exits, ",")
 		}
 		if got != want {
 			t.Errorf("match(%q) = %q, want %q", name, got, want)

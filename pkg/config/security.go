@@ -126,6 +126,16 @@ type Security struct {
 	// GoodBots lets verified search engine crawlers skip the bot challenge.
 	// Default true.
 	GoodBots *bool `yaml:"good_bots"`
+	// TunnelInput (top-level only) is what sites may reach on the edge
+	// itself through their tunnels: open (default) or restricted.
+	TunnelInput string `yaml:"tunnel_input,omitempty"`
+	// EdgeOutputDeny (top-level only, restricted mode) adds IPv4/IPv6
+	// networks the proxy may not connect to, e.g. a provider's private
+	// network, to the built-in metadata and mesh denylist.
+	EdgeOutputDeny []string `yaml:"edge_output_deny,omitempty"`
+	// SSHAllow (top-level only, managed firewall) limits edge.ssh_port to these
+	// IPv4/IPv6 networks. Empty leaves SSH open to the internet.
+	SSHAllow []string `yaml:"ssh_allow,omitempty"`
 }
 
 type GeoIP struct {
@@ -254,8 +264,45 @@ var (
 	wafTargetRe = regexp.MustCompile(`^(ARGS|ARGS_GET|ARGS_POST|ARGS_NAMES|ARGS_GET_NAMES|ARGS_POST_NAMES|REQUEST_HEADERS|REQUEST_HEADERS_NAMES|REQUEST_COOKIES|REQUEST_COOKIES_NAMES|REQUEST_BODY|REQUEST_URI|REQUEST_FILENAME|FILES|FILES_NAMES|XML|JSON)(:[A-Za-z0-9_.\[\]-]+)?$`)
 )
 
+// Tunnel input modes (security.tunnel_input).
+const (
+	TunnelInputOpen       = "open"
+	TunnelInputRestricted = "restricted"
+)
+
+// TunnelInputRestricted reports whether sites may reach only their own
+// connector control port and Smart DNS address on the edge.
+func (c *Config) TunnelInputRestricted() bool {
+	return c.Security.TunnelInput == TunnelInputRestricted
+}
+
 func (c *Config) validateSecurity(v *validator) {
 	c.validateSecurityRules(v, "security", &c.Security)
+	switch c.Security.TunnelInput {
+	case "", TunnelInputOpen:
+	case TunnelInputRestricted:
+		if !c.Edge.FirewallManaged() {
+			v.add("security.tunnel_input", "restricted needs the managed firewall (edge.manage_firewall)")
+		}
+	default:
+		v.add("security.tunnel_input", "must be open or restricted, got %q", c.Security.TunnelInput)
+	}
+	for i, s := range c.Security.EdgeOutputDeny {
+		if _, err := netip.ParsePrefix(s); err != nil {
+			v.add(fmt.Sprintf("security.edge_output_deny[%d]", i), "invalid CIDR %q", s)
+		}
+	}
+	if len(c.Security.EdgeOutputDeny) > 0 && !c.TunnelInputRestricted() {
+		v.add("security.edge_output_deny", "only applies with tunnel_input: restricted")
+	}
+	for i, s := range c.Security.SSHAllow {
+		if _, err := netip.ParsePrefix(s); err != nil {
+			v.add(fmt.Sprintf("security.ssh_allow[%d]", i), "invalid CIDR %q", s)
+		}
+	}
+	if len(c.Security.SSHAllow) > 0 && !c.Edge.FirewallManaged() {
+		v.add("security.ssh_allow", "needs the managed firewall (edge.manage_firewall)")
+	}
 	if g := c.Edge.GeoIP; g != nil {
 		if g.MaxMindAccountID == "" {
 			v.add("edge.geoip.maxmind_account_id", "is required")
@@ -283,6 +330,15 @@ func (c *Config) validateSecurity(v *validator) {
 		p := "apps." + name
 		if a.Security != nil {
 			c.validateSecurityRules(v, p+".security", a.Security)
+			if a.Security.TunnelInput != "" {
+				v.add(p+".security.tunnel_input", "is node-wide; set it in the top-level security block")
+			}
+			if len(a.Security.EdgeOutputDeny) > 0 {
+				v.add(p+".security.edge_output_deny", "is node-wide; set it in the top-level security block")
+			}
+			if len(a.Security.SSHAllow) > 0 {
+				v.add(p+".security.ssh_allow", "is node-wide; set it in the top-level security block")
+			}
 		}
 		if w := a.WAF; w != nil {
 			validateWAF(v, p+".waf", w)

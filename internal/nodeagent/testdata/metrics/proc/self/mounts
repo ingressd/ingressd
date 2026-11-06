@@ -1,0 +1,4 @@
+/dev/root / ext4 rw,relatime 0 0
+proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0
+/dev/sdb1 /var/lib ext4 rw,relatime 0 0
+tmpfs /var/lib/ingressd/tmp tmpfs rw 0 0

@@ -82,12 +82,8 @@ func newEdgeChecker() *edgeChecker {
 	return c
 }
 
-// setChecks replaces the configured checks (smartdns.checks).
-func (c *edgeChecker) setChecks(s *config.SmartDNS) {
-	var checks []config.SmartDNSCheck
-	if s != nil {
-		checks = s.Checks
-	}
+// setChecks replaces the configured checks (smartdns.checks of every block).
+func (c *edgeChecker) setChecks(checks []config.SmartDNSCheck) {
 	c.checks.Store(&checks)
 }
 
@@ -304,11 +300,11 @@ var (
 func probeEdge(ctx context.Context, e *egress, ip netip.Addr, ck config.SmartDNSCheck) string {
 	cfg := probeTLSConfig(ck.Host)
 	cfg.NextProtos = []string{"http/1.1"}
-	d := tls.Dialer{NetDialer: e.dialer(), Config: cfg}
-	conn, err := d.DialContext(ctx, "tcp4", net.JoinHostPort(ip.String(), probePort))
+	raw, err := e.dialContext(ctx, "tcp4", net.JoinHostPort(ip.String(), probePort))
 	if err != nil {
 		return ""
 	}
+	conn := tls.Client(raw, cfg)
 	defer conn.Close()
 	if dl, ok := ctx.Deadline(); ok {
 		conn.SetDeadline(dl)

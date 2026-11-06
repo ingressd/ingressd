@@ -14,11 +14,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/ingressd/ingressd/internal/connector/proto"
+	"github.com/ingressd/ingressd/pkg/nodeproto"
 )
 
 // TokenTTL is how long an enrollment token stays valid.
@@ -52,6 +55,9 @@ type Connector struct {
 	Hostname       string        `json:"hostname,omitempty"`
 	Health         *proto.Health `json:"health,omitempty"`
 	Discovery      *Discovery    `json:"discovery,omitempty"` // discovery.go
+	// SmartDNSUsage are relay usage deltas reported by the connector and not
+	// yet taken into the node's usage (TakeSmartDNSUsage).
+	SmartDNSUsage []nodeproto.ServiceUsage `json:"smartdns_usage,omitempty"`
 }
 
 // Store reads and updates connector.json. Updates hold an exclusive file
@@ -186,9 +192,75 @@ func (s *Store) Report(tunnel string, h proto.Health) error {
 			c = &Connector{}
 			st.Connectors[tunnel] = c
 		}
+		if len(h.SmartDNSUsage) > 0 {
+			c.SmartDNSUsage = mergeUsage(c.SmartDNSUsage, h.SmartDNSUsage)
+			h.SmartDNSUsage = nil
+		}
+		if sd := h.SmartDNS; sd != nil && len(sd.Recent) > maxRecentLookups {
+			sd.Recent = sd.Recent[:maxRecentLookups]
+		}
 		c.Health = &h
 		return nil
 	})
+}
+
+// maxRecentLookups bounds the lookups kept per connector.
+const maxRecentLookups = 200
+
+func mergeUsage(into, add []nodeproto.ServiceUsage) []nodeproto.ServiceUsage {
+	for _, u := range add {
+		if u.Service == "" || u.Bytes < 0 || u.Conns < 0 {
+			continue
+		}
+		merged := false
+		for i := range into {
+			if into[i].Service == u.Service {
+				into[i].Bytes += u.Bytes
+				into[i].Conns += u.Conns
+				merged = true
+				break
+			}
+		}
+		if !merged && len(into) < 256 {
+			into = append(into, nodeproto.ServiceUsage{Service: u.Service, Bytes: u.Bytes, Conns: u.Conns})
+		}
+	}
+	return into
+}
+
+// TakeSmartDNSUsage returns and clears every connector's pending relay
+// usage, with Site set to the tunnel.
+func (s *Store) TakeSmartDNSUsage() ([]nodeproto.ServiceUsage, error) {
+	var out []nodeproto.ServiceUsage
+	err := s.Update(func(st *State) error {
+		for _, name := range slices.Sorted(maps.Keys(st.Connectors)) {
+			c := st.Connectors[name]
+			for _, u := range c.SmartDNSUsage {
+				u.Site = name
+				out = append(out, u)
+			}
+			c.SmartDNSUsage = nil
+		}
+		return nil
+	})
+	return out, err
+}
+
+// SmartDNSRecent returns a connector's latest reported lookups, newest first.
+func (s *Store) SmartDNSRecent(tunnel string, limit int) ([]nodeproto.RecentLookup, error) {
+	st, err := s.Load()
+	if err != nil {
+		return nil, err
+	}
+	c := st.Connectors[tunnel]
+	if c == nil || c.Health == nil || c.Health.SmartDNS == nil {
+		return []nodeproto.RecentLookup{}, nil
+	}
+	r := c.Health.SmartDNS.Recent
+	if limit > 0 && len(r) > limit {
+		r = r[:limit]
+	}
+	return r, nil
 }
 
 func pruneTokens(ts []Token, now time.Time) []Token {

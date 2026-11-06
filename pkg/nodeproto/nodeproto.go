@@ -137,6 +137,8 @@ type Hello struct {
 	Capabilities    []string `json:"capabilities,omitempty"` // e.g. "smartdns", "mesh", "l4"
 	AppliedRevision int64    `json:"applied_revision"`
 	UsageSeq        int64    `json:"usage_seq"` // last usage seq the node sent
+	// MetricsSeq is the last metrics seq the node produced (additive).
+	MetricsSeq int64 `json:"metrics_seq,omitempty"`
 	// MeshPublicKey is the node's WireGuard key for the org mesh (generated
 	// and kept on the node); the panel distributes it to the other nodes.
 	MeshPublicKey string `json:"mesh_public_key,omitempty"`
@@ -174,9 +176,12 @@ type Status struct {
 	Tunnels         []TunnelStatus `json:"tunnels,omitempty"`
 	Certs           []CertStatus   `json:"certs,omitempty"`
 	Exits           []ExitStatus   `json:"exits,omitempty"` // smart DNS exits hosted on this node
-	Mesh            []MeshPeer     `json:"mesh,omitempty"`
-	DiskFreeBytes   int64          `json:"disk_free_bytes,omitempty"`
-	Uptime          int64          `json:"uptime_seconds,omitempty"`
+	// SmartDNSServices are the smart DNS services this node relays and the
+	// exit each uses now (additive).
+	SmartDNSServices []ServiceStatus `json:"smartdns_services,omitempty"`
+	Mesh             []MeshPeer      `json:"mesh,omitempty"`
+	DiskFreeBytes    int64           `json:"disk_free_bytes,omitempty"`
+	Uptime           int64           `json:"uptime_seconds,omitempty"`
 }
 
 type Check struct {
@@ -208,6 +213,23 @@ type TunnelStatus struct {
 	ConnectorOS      string                `json:"connector_os,omitempty"`
 	ConnectorArch    string                `json:"connector_arch,omitempty"`
 	ConnectorUpdate  *ConnectorUpdateState `json:"connector_update,omitempty"`
+	// ConnectorEdges is the connector's last report of every edge of the
+	// site (connector sites, additive), so RTTs to all nodes can be read
+	// from any one of them.
+	ConnectorEdges []ConnectorEdge `json:"connector_edges,omitempty"`
+	// ConnectorSmartDNS is the connector's last Smart DNS report (connector
+	// sites, additive).
+	ConnectorSmartDNS *ConnectorSmartDNS `json:"connector_smartdns,omitempty"`
+}
+
+// ConnectorEdge is one edge as a connector reported it. RTTMillis is the
+// connector's smoothed round trip through the tunnel (0 = not measured).
+type ConnectorEdge struct {
+	Node          string  `json:"node,omitempty"`
+	EdgePublicKey string  `json:"edge_public_key,omitempty"`
+	RTTMillis     float64 `json:"rtt_ms,omitempty"`
+	Up            bool    `json:"up"`
+	Transport     string  `json:"transport,omitempty"`
 }
 
 // Certificate states.
@@ -236,6 +258,18 @@ type ExitStatus struct {
 	// after resolving the config's host name), additive.
 	Endpoint string `json:"endpoint,omitempty"`
 	Message  string `json:"message,omitempty"`
+}
+
+// ServiceStatus is a smart DNS service's exit choice on one home node.
+type ServiceStatus struct {
+	Name  string   `json:"name"`
+	Exits []string `json:"exits"` // in order of preference
+	// Active is the exit new connections use, empty while every exit is
+	// down; Failover is true when it is not Exits[0].
+	Active   string    `json:"active,omitempty"`
+	Failover bool      `json:"failover,omitempty"`
+	Since    time.Time `json:"since,omitempty"` // when Active was chosen
+	Message  string    `json:"message,omitempty"`
 }
 
 type MeshPeer struct {
@@ -275,6 +309,8 @@ type SiteUsage struct {
 }
 
 type ServiceUsage struct {
+	// Site is the connector site whose relay carried the bytes.
+	Site    string `json:"site,omitempty"`
 	Service string `json:"service"`
 	Bytes   int64  `json:"bytes"`
 	Conns   int64  `json:"connections"`
@@ -459,7 +495,9 @@ type SiteConfig struct {
 }
 
 type SmartDNSRecentRequest struct {
-	Limit int `json:"limit,omitempty"`
+	// Site is the connector site whose lookups are wanted.
+	Site  string `json:"site,omitempty"`
+	Limit int    `json:"limit,omitempty"`
 }
 
 type SmartDNSRecent struct {

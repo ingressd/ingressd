@@ -4,6 +4,7 @@ package render
 
 import (
 	"fmt"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -35,10 +36,21 @@ func renderNFT(cfg *config.Config, extraTCP, extraUDP []int) string {
 	if cfg.Edge.FirewallManaged() {
 		tcp := append([]int{cfg.Edge.SSHPort, 80, 443}, l4InputTCP(cfg)...)
 		tcp = append(tcp, extraTCP...)
-		udp := append([]int{443}, smartDNSInputUDP(cfg)...)
+		ssh := sshInputRules(cfg)
+		if ssh != "" {
+			tcp = slices.DeleteFunc(tcp, func(p int) bool { return p == cfg.Edge.SSHPort })
+		}
+		udp := append([]int{443}, meshInputUDP(cfg)...)
 		udp = append(udp, extraUDP...)
 		for _, t := range cfg.Tunnels {
 			udp = append(udp, t.ListenPort)
+		}
+		var tunnelRules, output string
+		rules := meshInputRules(cfg) + exitInputRules(cfg) + connectorInputRules(cfg) + forwardInputRules(cfg)
+		if cfg.TunnelInputRestricted() {
+			tunnelRules = restrictedTunnelInput(cfg)
+			rules = meshInputRules(cfg) + forwardInputRules(cfg)
+			output = restrictedOutput(cfg)
 		}
 		fmt.Fprintf(&b, `
 table inet ingressd {
@@ -47,8 +59,8 @@ table inet ingressd {
 		ct state established,related accept
 		ct state invalid drop
 		iifname "lo" accept
-		meta l4proto { icmp, ipv6-icmp } accept
-		tcp dport { %s } accept
+%s		meta l4proto { icmp, ipv6-icmp } accept
+%s		tcp dport { %s } accept
 		udp dport { %s } accept
 %s	}
 
@@ -56,17 +68,17 @@ table inet ingressd {
 		type filter hook forward priority filter; policy drop;
 		ct state established,related accept
 %s	}
-}
-`, portSet(tcp), portSet(udp), smartDNSInputRules(cfg)+connectorInputRules(cfg), l4ForwardRules(cfg))
+%s}
+`, tunnelRules, ssh, portSet(tcp), portSet(udp), rules, l4ForwardRules(cfg), output)
 	}
 
 	var marks, nets []string
-	for i, name := range sortedKeys(cfg.Tunnels) {
+	for _, name := range sortedKeys(cfg.Tunnels) {
 		t := cfg.Tunnels[name]
 		if t.VirtualPrefix == "" {
 			continue
 		}
-		marks = append(marks, fmt.Sprintf("%s : %d", t.VirtualPrefix, TableBase+i))
+		marks = append(marks, fmt.Sprintf("%s : %d", t.VirtualPrefix, cfg.TunnelTable(name)))
 		nets = append(nets, fmt.Sprintf("%s : %s", t.VirtualPrefix, t.Subnets[0]))
 	}
 	if len(marks) > 0 {
@@ -91,8 +103,81 @@ table ip ingressd_nat {
 `, strings.Join(marks, ", "), strings.Join(nets, ", "))
 	}
 	b.WriteString(renderL4NFT(cfg))
-	b.WriteString(renderSmartDNSNFT(cfg))
+	b.WriteString(dropOldSmartDNSTables)
 	return b.String()
+}
+
+// restrictedTunnelInput (security.tunnel_input: restricted) admits from each
+// tunnel only its connector control port and, for sites allowed to use
+// the node exit, the exit API, both pinned to the tunnel's own interface and transit addresses, and drops
+// everything else arriving on a tunnel interface before the public ports
+// are opened: a site must not reach the proxy, SSH or the admin hostname
+// through its tunnel (another tenant's apps by Host header, with a source
+// address that may satisfy "LAN" IP rules).
+func restrictedTunnelInput(cfg *config.Config) string {
+	if len(cfg.Tunnels) == 0 {
+		return ""
+	}
+	var ifs []string
+	for _, name := range sortedKeys(cfg.Tunnels) {
+		ifs = append(ifs, strconv.Quote(config.InterfaceName(name)))
+	}
+	return connectorInputRules(cfg) + exitInputRules(cfg) +
+		fmt.Sprintf("\t\tiifname { %s } drop\n", strings.Join(ifs, ", "))
+}
+
+// restrictedOutput keeps the proxy from being used to reach cloud metadata
+// or the mesh (SSRF through an origin address), plus the networks in
+// security.edge_output_deny. It matches unprivileged sockets only: the edge
+// runs as its own user, while the control plane (root) uses the mesh
+// itself. TCP only, so host daemons that query link-local NTP or DNS
+// services keep working.
+func restrictedOutput(cfg *config.Config) string {
+	v4 := []string{"169.254.0.0/16"}
+	v6 := []string{"fd00:ec2::254/128"} // AWS IMDS over IPv6
+	if p, ok := cfg.Mesh.MeshPrefix(); ok {
+		v4 = append(v4, p.Masked().String())
+	}
+	deny4, deny6 := splitPrefixes(cfg.Security.EdgeOutputDeny)
+	v4 = append(v4, deny4...)
+	v6 = append(v6, deny6...)
+	return fmt.Sprintf(`
+	chain output {
+		type filter hook output priority filter; policy accept;
+%s		meta skuid != 0 meta l4proto tcp ip daddr { %s } drop
+		meta skuid != 0 meta l4proto tcp ip6 daddr { %s } drop
+	}
+`, forwardOutputRule(cfg), strings.Join(v4, ", "), strings.Join(v6, ", "))
+}
+
+// sshInputRules opens the SSH port to security.ssh_allow only. They follow the
+// restricted tunnel drop, so a listed address cannot arrive through a tunnel.
+func sshInputRules(cfg *config.Config) string {
+	v4, v6 := splitPrefixes(cfg.Security.SSHAllow)
+	var b strings.Builder
+	if len(v4) > 0 {
+		fmt.Fprintf(&b, "\t\tip saddr { %s } tcp dport %d accept\n", strings.Join(v4, ", "), cfg.Edge.SSHPort)
+	}
+	if len(v6) > 0 {
+		fmt.Fprintf(&b, "\t\tip6 saddr { %s } tcp dport %d accept\n", strings.Join(v6, ", "), cfg.Edge.SSHPort)
+	}
+	return b.String()
+}
+
+// splitPrefixes returns validated CIDRs by address family, masked.
+func splitPrefixes(list []string) (v4, v6 []string) {
+	for _, s := range list {
+		p, err := netip.ParsePrefix(s)
+		if err != nil {
+			continue
+		}
+		if p.Addr().Is4() {
+			v4 = append(v4, p.Masked().String())
+		} else {
+			v6 = append(v6, p.Masked().String())
+		}
+	}
+	return v4, v6
 }
 
 func portSet(ports []int) string {

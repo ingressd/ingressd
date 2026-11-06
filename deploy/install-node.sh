@@ -85,7 +85,15 @@ say "packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq wireguard-tools nftables git ca-certificates curl iproute2 >/dev/null
-modprobe wireguard 2>/dev/null || echo "warning: could not load the wireguard module (kernel too old?)" >&2
+# In a container modprobe always fails; what matters is whether the kernel
+# (the host's, there) can make a WireGuard interface.
+if ! modprobe wireguard 2>/dev/null; then
+	if ip link add ix-wgprobe type wireguard 2>/dev/null; then
+		ip link del ix-wgprobe
+	else
+		echo "warning: WireGuard is not available (kernel too old, or a container whose host has not loaded the wireguard module)" >&2
+	fi
+fi
 
 # --- Binaries -------------------------------------------------------------------
 WORK=$(mktemp -d)
@@ -117,11 +125,11 @@ verify_sums() {
 			die "SHA256SUMS signature verification failed"
 		say "SHA256SUMS signature verified (minisign)"
 	elif [ -x /usr/local/bin/ingressd ] && /usr/local/bin/ingressd verify-sums --help >/dev/null 2>&1; then
-		/usr/local/bin/ingressd verify-sums "$1/SHA256SUMS" "$1/SHA256SUMS.minisig" >/dev/null ||
+		INGRESSD_RELEASE_PUBLIC_KEY="$RELEASE_KEY" /usr/local/bin/ingressd verify-sums "$1/SHA256SUMS" "$1/SHA256SUMS.minisig" >/dev/null ||
 			die "SHA256SUMS signature verification failed"
 		say "SHA256SUMS signature verified (installed ingressd)"
 	else
-		"$WORK/ingressd" verify-sums "$1/SHA256SUMS" "$1/SHA256SUMS.minisig" >/dev/null ||
+		INGRESSD_RELEASE_PUBLIC_KEY="$RELEASE_KEY" "$WORK/ingressd" verify-sums "$1/SHA256SUMS" "$1/SHA256SUMS.minisig" >/dev/null ||
 			die "SHA256SUMS signature verification failed"
 		say "SHA256SUMS signature verified by the downloaded ingressd (install minisign for an independent check)"
 	fi
@@ -285,6 +293,16 @@ EOF
 # deploy/systemd/ingressd.tmpfiles); also fixes an older edge-owned dir.
 printf 'd /run/ingressd 1770 root ingressd -\n' >/etc/tmpfiles.d/ingressd.conf
 systemd-tmpfiles --create /etc/tmpfiles.d/ingressd.conf
+# A non-default release key (a staging or self-signed panel) must also reach
+# the agent, or its own updates would be checked against the built-in key.
+# The literal is split so a panel that rewrites the key in this script
+# leaves the comparison alone.
+if [ "$RELEASE_KEY" != "RWTCi6nxdL6unHcK5KWP/DTr/NFJSt1EEN48""LJTlNVJHGkPs9/Ax00gl" ]; then
+	mkdir -p /etc/systemd/system/ingressd.service.d
+	printf '[Service]\nEnvironment=INGRESSD_RELEASE_PUBLIC_KEY=%s\n' "$RELEASE_KEY" >/etc/systemd/system/ingressd.service.d/release-key.conf
+else
+	rm -f /etc/systemd/system/ingressd.service.d/release-key.conf
+fi
 systemctl daemon-reload
 
 # --- Firewall dead-man switch ----------------------------------------------------
