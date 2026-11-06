@@ -64,11 +64,29 @@ type ExitServer struct {
 	refused    atomic.Int64
 	usageMu    sync.Mutex
 	usage      map[string]*siteUsage // by tunnel
+	// alerts tracks each site against the daily limits; Run's goroutine only.
+	alerts map[string]*usageWindow
 }
 
 // maxSiteStreams caps one site's open relay streams. A household's devices
 // use far fewer; the cap keeps one site from using up the node's sockets.
 const maxSiteStreams = 1024
+
+// A site past either limit in a day is logged, once a day. The exit stays
+// open: these are far above a household's streaming, which is what the exit
+// is for. A day of 4K video is under 200 GiB.
+const (
+	exitAlertBytes  = 500 << 30
+	exitAlertConns  = 500_000
+	exitAlertWindow = 24 * time.Hour
+)
+
+// usageWindow is a site's counters at the start of its current day.
+type usageWindow struct {
+	start        time.Time
+	bytes, conns int64
+	alerted      bool
+}
 
 // siteUsage counts one site's use of the exit.
 type siteUsage struct {
@@ -106,6 +124,7 @@ func NewExitServer(o ExitServerOptions) *ExitServer {
 		apiPort:    o.APIPort,
 		relayPort:  o.RelayPort,
 		usage:      map[string]*siteUsage{},
+		alerts:     map[string]*usageWindow{},
 	}
 	s.probes = newProber(s.log, o.TraceURL, s.ctx)
 	s.listeners = &listenerSet{log: s.log, running: map[string]io.Closer{}, failed: map[string]string{}}
@@ -134,6 +153,9 @@ func (s *ExitServer) Run(ctx context.Context) {
 		if n%3 == 0 {
 			s.listeners.retry()
 		}
+		if n%30 == 0 {
+			s.checkUsage(time.Now())
+		}
 		st := s.state()
 		if st.egress != nil {
 			s.probes.watch(map[string]*egress{st.egress.exit: st.egress}, time.Now())
@@ -142,6 +164,23 @@ func (s *ExitServer) Run(ctx context.Context) {
 		}
 		if s.statusPath != "" {
 			writeStatusFile(s.statusPath, s.Snapshot())
+		}
+	}
+}
+
+// checkUsage logs sites past a daily limit.
+func (s *ExitServer) checkUsage(now time.Time) {
+	for site, u := range s.usageTotals() {
+		w := s.alerts[site]
+		if w == nil || now.Sub(w.start) >= exitAlertWindow {
+			w = &usageWindow{start: now, bytes: u.Bytes, conns: u.Conns}
+			s.alerts[site] = w
+		}
+		bytes, conns := u.Bytes-w.bytes, u.Conns-w.conns
+		if !w.alerted && (bytes > exitAlertBytes || conns > exitAlertConns) {
+			w.alerted = true
+			s.log.Warn("site is over the daily exit usage limit", "site", site, "bytes", bytes, "connections", conns,
+				"limit_bytes", int64(exitAlertBytes), "limit_connections", exitAlertConns, "since", w.start)
 		}
 	}
 }
@@ -351,6 +390,9 @@ func (s *ExitServer) Exits() []nodeproto.ExitStatus {
 		return nil
 	}
 	es := exitStatus(e.exit, e, s.probes, s.edges)
+	for site, u := range s.usageTotals() {
+		es.Sites = append(es.Sites, nodeproto.ExitUsage{Site: site, Bytes: u.Bytes, Conns: u.Conns})
+	}
 	return []nodeproto.ExitStatus{es}
 }
 
@@ -384,13 +426,19 @@ func (s *ExitServer) Snapshot() ExitStatusFile {
 		out.Exits = []nodeproto.ExitStatus{}
 	}
 	slices.Sort(out.Sites)
+	if t := s.usageTotals(); len(t) > 0 {
+		out.Usage = t
+	}
+	return out
+}
+
+// usageTotals is each site's use of the exit since this process started.
+func (s *ExitServer) usageTotals() map[string]ExitUsage {
 	s.usageMu.Lock()
 	defer s.usageMu.Unlock()
+	out := make(map[string]ExitUsage, len(s.usage))
 	for site, u := range s.usage {
-		if out.Usage == nil {
-			out.Usage = map[string]ExitUsage{}
-		}
-		out.Usage[site] = ExitUsage{Conns: u.conns.Load(), Active: u.active.Load(), Bytes: u.bytes.Load()}
+		out[site] = ExitUsage{Conns: u.conns.Load(), Active: u.active.Load(), Bytes: u.bytes.Load()}
 	}
 	return out
 }

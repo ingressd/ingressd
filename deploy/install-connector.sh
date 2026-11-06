@@ -316,6 +316,34 @@ if [ "$NO_SERVICE" -eq 1 ]; then
 	say "done (no service installed). Start it with: $EXE $* run"
 	exit 0
 fi
+
+have_nft() { command -v nft >/dev/null 2>&1 || [ -x /usr/sbin/nft ] || [ -x /sbin/nft ]; }
+
+install_nft() {
+	if command -v apt-get >/dev/null 2>&1; then
+		DEBIAN_FRONTEND=noninteractive apt-get install -y nftables ||
+			{ apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y nftables; }
+	elif command -v dnf >/dev/null 2>&1; then
+		dnf install -y nftables
+	elif command -v apk >/dev/null 2>&1; then
+		apk add --no-cache nftables
+	else
+		return 1
+	fi
+}
+
+# TUN mode enforces the allowlist with nft. Standard input stays away from the
+# package manager, which would otherwise read the rest of a piped script.
+if [ "$ROOT" -eq 1 ] && [ "$SYSTEMD" -eq 1 ] && ! have_nft; then
+	say "installing nftables, which TUN mode needs to enforce the allowlist"
+	install_nft </dev/null >/dev/null 2>&1 || true
+	if have_nft; then
+		UPGRADE=1 # a running service only finds nft when it restarts
+	else
+		warn "could not install nftables: in TUN mode the allowlist is NOT enforced on this host. Install it (apt-get install nftables, dnf install nftables or apk add nftables), then run: systemctl restart ingressd-connector"
+	fi
+fi
+
 if [ "$ROOT" -eq 1 ] && { [ "$SYSTEMD" -eq 1 ] || [ "$OS" = darwin ]; }; then
 	"$EXE" "$@" install-service
 	# A non-default release key (a staging or self-signed panel) must reach the

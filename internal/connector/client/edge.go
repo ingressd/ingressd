@@ -664,7 +664,10 @@ func (e *edge) reportLoop(ctx context.Context) {
 			RxBytes: p.RxBytes, TxBytes: p.TxBytes, Discovery: e.s.discover,
 			OS: runtime.GOOS, Arch: runtime.GOARCH, Install: e.s.upd.install, Update: e.s.upd.snapshot(),
 		}
-		h.Reachability = testReachability(ctx, e.s.stateCopy().reachTargets())
+		cp := e.s.stateCopy()
+		h.Reachability = testReachability(ctx, cp.reachTargets())
+		h.RefusedSubnets = cp.refused()
+		h.AllowlistError = cp.reach.report()
 		h.Edges = e.s.edgeReports()
 		if sd := e.s.r.sd; sd != nil {
 			h.SmartDNS = sd.report()

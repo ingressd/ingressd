@@ -3,6 +3,8 @@
 package main
 
 import (
+	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +12,58 @@ import (
 	"github.com/ingressd/ingressd/internal/connector/client"
 	"github.com/ingressd/ingressd/internal/connector/proto"
 )
+
+func runAllow(t *testing.T, path string, args ...string) (string, error) {
+	t.Helper()
+	var b strings.Builder
+	cmd := newRootCmd()
+	cmd.SetOut(&b)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs(append([]string{"--state", path, "allow"}, args...))
+	err := cmd.Execute()
+	return b.String(), err
+}
+
+func TestAllowCommands(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "connector.json")
+	st := &client.State{Mode: "netstack", Edges: []client.EdgeState{{Config: proto.TunnelConfig{Subnets: []string{"192.168.0.0/24", "10.0.0.0/8"}}}}}
+	if err := st.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runAllow(t, path, "list")
+	if err != nil || !strings.Contains(out, "192.168.0.0/16") || !strings.Contains(out, "pinned at the next start") {
+		t.Fatalf("%q, %v", out, err)
+	}
+	if out, err = runAllow(t, path, "add", "203.0.113.0/24"); err != nil || !strings.Contains(out, "203.0.113.0/24") {
+		t.Fatalf("%q, %v", out, err)
+	}
+	if _, err = runAllow(t, path, "add", "0.0.0.0/0"); err == nil || !strings.Contains(err.Error(), "--allow-any-network") {
+		t.Fatalf("got %v", err)
+	}
+	if _, err = runAllow(t, path, "add", "::/0", "--allow-any-network"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = runAllow(t, path, "remove", "::/0", "10.0.0.0/8"); err != nil {
+		t.Fatal(err)
+	}
+	out, err = runAllow(t, path, "list")
+	if err != nil || !strings.Contains(out, "Refused: 10.0.0.0/8") || !strings.Contains(out, "allow add 10.0.0.0/8") || strings.Contains(out, "::/0") {
+		t.Errorf("%q, %v", out, err)
+	}
+}
+
+func TestPrintStatusLANFilter(t *testing.T) {
+	now := time.Now()
+	st := &client.State{Mode: "tun"}
+	var b strings.Builder
+	s := &client.Status{Health: proto.Health{Time: now}, LANFilterOff: true}
+	if err := printStatus(&b, st, s, now); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.String(), "NOT ENFORCED") {
+		t.Errorf("%s", b.String())
+	}
+}
 
 func TestPrintStatusShowsEveryEdge(t *testing.T) {
 	now := time.Now()

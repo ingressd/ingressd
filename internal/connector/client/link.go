@@ -212,15 +212,7 @@ func (l *userLink) Close() error {
 
 // openNetstack brings up wireguard-go on a gVisor netstack (no root).
 func openNetstack(st *State, priv wgtypes.Key, log *slog.Logger) (link, error) {
-	var allowed []netip.Prefix
-	for _, s := range st.Subnets() {
-		p, err := netip.ParsePrefix(s)
-		if err != nil {
-			log.Warn("ignoring an invalid subnet", "subnet", s)
-			continue
-		}
-		allowed = append(allowed, p)
-	}
+	allowed := st.allowedSubnets()
 	addrs := st.Addresses()
 	if len(addrs) == 0 {
 		return nil, fmt.Errorf("no site transit address in the tunnel config")

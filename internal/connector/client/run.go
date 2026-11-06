@@ -63,6 +63,19 @@ type Runner struct {
 	upd *updater // self-update state, kept across link restarts (update.go)
 	// sd runs Smart DNS, kept across link restarts (smartdns.go).
 	sd *sdController
+	// told are the warnings already logged, kept across link restarts.
+	told map[string]bool
+}
+
+// warnOnce logs a warning the first time key is seen.
+func (r *Runner) warnOnce(key, msg string, args ...any) {
+	if r.told == nil {
+		r.told = map[string]bool{}
+	}
+	if !r.told[key] {
+		r.told[key] = true
+		r.Log.Warn(msg, args...)
+	}
 }
 
 // errRestart asks Run to rebuild the link after a config change.
@@ -147,6 +160,17 @@ func (r *Runner) runOnce(ctx context.Context) error {
 		refresh: make(chan struct{}, 1), started: time.Now().UTC(),
 	}
 	s.discover = !r.NoDiscovery && !st.NoDiscovery
+	st.reach = openReach(r.StatePath, st, r.Log)
+	if p := st.reach.problem; p != "" {
+		r.warnOnce("allowlist "+p, p)
+	}
+	for _, p := range st.refused() {
+		r.warnOnce("refused "+p, "refusing a network outside this connector's allowlist; if it is wanted, run on this host: ingressd-connector allow add "+p, "network", p)
+	}
+	if s.mode == ModeTUN {
+		ifname := cmp.Or(st.Interface, DefaultInterface)
+		st.routes = func() []netip.Prefix { return hostRoutes(ifname) }
+	}
 	if r.upd == nil {
 		r.upd = newUpdater(r.StatePath)
 	}
@@ -176,6 +200,11 @@ func (r *Runner) runOnce(ctx context.Context) error {
 	}
 	defer s.link.Close()
 	s.hostname, _ = os.Hostname()
+	for _, p := range st.Addresses() {
+		if route, clash := st.transitClash(p.String()); clash {
+			r.warnOnce("transit "+p.String(), "transit address overlaps a local route", "address", p, "route", route)
+		}
+	}
 	s.log.Info("connector starting", "tunnel", st.Tunnel(), "mode", s.mode, "link", s.link.Kind(), "edges", len(st.Edges))
 
 	ctx, cancel := context.WithCancelCause(ctx)
@@ -219,12 +248,22 @@ func (s *session) manage(ctx context.Context) {
 			s.rescueTick(ctx, time.Now())
 			s.writeStatus()
 			s.upd.tick(s.healthy())
+			if s.allowlistChanged() {
+				s.log.Info("allowlist changed; restarting link")
+				s.restart(errRestart)
+			}
 		case <-refresh.C:
 			s.reconcile(ctx)
 		case <-s.refresh:
 			s.reconcile(ctx)
 		}
 	}
+}
+
+// allowlistChanged reports whether the file differs from the list in effect.
+func (s *session) allowlistChanged() bool {
+	raw, _ := os.ReadFile(AllowlistPath(s.r.StatePath))
+	return !bytes.Equal(raw, s.stateCopy().reach.raw)
 }
 
 // healthy reports whether some edge has a live tunnel and answered a
@@ -349,6 +388,11 @@ func mergeSiblings(st *State, gone map[string]bool, now time.Time) bool {
 			if _, err := wgtypes.ParseKey(sb.EdgePublicKey); err != nil || sb.Endpoint == "" || !privateTransit(sb.Address) {
 				continue
 			}
+			if known := st.Edge(sb.EdgePublicKey); known == nil || known.Config.Address != sb.Address {
+				if _, clash := st.transitClash(sb.Address); clash {
+					continue
+				}
+			}
 			if _, ok := listed[sb.EdgePublicKey]; !ok || fresh {
 				listed[sb.EdgePublicKey], parent[sb.EdgePublicKey] = sb, es.Config
 			}
@@ -458,6 +502,12 @@ func (s *session) applyEdgeConfig(e *edge, tc proto.TunnelConfig) error {
 		s.mu.Unlock()
 		return fmt.Errorf("config refused: %w", err)
 	}
+	if tc.Address != es.Config.Address {
+		if route, clash := s.st.transitClash(tc.Address); clash {
+			s.mu.Unlock()
+			return fmt.Errorf("config refused: transit address %q overlaps the local route %s", tc.Address, route)
+		}
+	}
 	before := sharedSettings(s.st)
 	old := es.Config
 	es.Config, es.LastSeen = tc, time.Now().UTC()
@@ -522,7 +572,7 @@ func (s *session) transparent() bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.st.Transparent()) > 0
+	return len(s.st.allowedTransparent()) > 0
 }
 
 // allowedIPs is an edge peer's AllowedIPs: its /30, plus 0.0.0.0/0 for the
@@ -633,14 +683,17 @@ func (s *session) snapshot() Status {
 	}
 	tunnel := s.st.Tunnel()
 	info := siblingInfo(s.st)
+	refused, reach := s.st.refused(), s.st.reach
 	s.mu.Unlock()
 	now := time.Now().UTC()
 	st := Status{
 		Health: proto.Health{Time: now, Mode: s.mode, Version: version.String(), Hostname: s.hostname, MTU: s.link.MTU(), Discovery: s.discover,
-			OS: runtime.GOOS, Arch: runtime.GOARCH, Install: s.upd.install, Update: s.upd.snapshot()},
-		Tunnel:    tunnel,
-		Started:   s.started,
-		Interface: s.link.Kind(),
+			OS: runtime.GOOS, Arch: runtime.GOARCH, Install: s.upd.install, Update: s.upd.snapshot(),
+			RefusedSubnets: refused, AllowlistError: reach.report()},
+		Tunnel:       tunnel,
+		Started:      s.started,
+		Interface:    s.link.Kind(),
+		LANFilterOff: reach != nil && reach.unfiltered.Load(),
 	}
 	var best *EdgeStatus
 	pollOK := false

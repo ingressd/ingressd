@@ -3,9 +3,11 @@
 package smartdns
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +18,7 @@ import (
 	"time"
 
 	"github.com/ingressd/ingressd/pkg/config"
+	"github.com/ingressd/ingressd/pkg/nodeproto"
 )
 
 var (
@@ -246,6 +249,52 @@ func TestExitServerUsage(t *testing.T) {
 	resp, err := relayVia(t, s, siteAddr, ConnectRequest{Exit: "nl", Host: "tv.stream.example", Port: 443, Addrs: addrs("192.0.2.20")})
 	if err != nil || resp.OK || resp.ExitDown || !strings.Contains(resp.Error, "too many") {
 		t.Errorf("%+v, %v", resp, err)
+	}
+}
+
+func TestExitServerUsageAlert(t *testing.T) {
+	var out bytes.Buffer
+	s := NewExitServer(ExitServerOptions{Log: slog.New(slog.NewTextHandler(&out, nil))})
+	now := time.Now()
+	u := s.usageFor("site1")
+	u.bytes.Store(1 << 40)
+	s.checkUsage(now) // the window starts here, whatever came before
+	u.bytes.Add(exitAlertBytes)
+	s.checkUsage(now.Add(time.Hour))
+	if out.Len() != 0 {
+		t.Fatalf("at the limit: %s", out.String())
+	}
+	u.bytes.Add(1)
+	s.checkUsage(now.Add(2 * time.Hour))
+	s.checkUsage(now.Add(3 * time.Hour))
+	if got := strings.Count(out.String(), "over the daily exit usage limit"); got != 1 {
+		t.Fatalf("%d alerts: %s", got, out.String())
+	}
+	if !strings.Contains(out.String(), "site=site1") {
+		t.Error(out.String())
+	}
+
+	// A new day starts over; so do connections count on their own.
+	s.checkUsage(now.Add(exitAlertWindow))
+	u.conns.Add(exitAlertConns + 1)
+	s.checkUsage(now.Add(exitAlertWindow + time.Hour))
+	if got := strings.Count(out.String(), "over the daily exit usage limit"); got != 2 {
+		t.Errorf("%d alerts: %s", got, out.String())
+	}
+}
+
+func TestExitsCarrySiteUsage(t *testing.T) {
+	s := newTestExitServer(t, "127.0.0.1:9")
+	u := s.usageFor("site1")
+	u.bytes.Store(8)
+	u.conns.Store(1)
+	e := s.Exits()
+	if len(e) != 1 || len(e[0].Sites) != 1 || e[0].Sites[0] != (nodeproto.ExitUsage{Site: "site1", Bytes: 8, Conns: 1}) {
+		t.Fatalf("%+v", e)
+	}
+	b, err := json.Marshal(e[0])
+	if err != nil || strings.Contains(string(b), "site1") {
+		t.Errorf("%s, %v", b, err)
 	}
 }
 

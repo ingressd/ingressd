@@ -226,7 +226,7 @@ func configureInterface(name string, st *State, log *slog.Logger) (func(), error
 	}
 
 	var rules []*netlink.Rule
-	srcs, err := parseTransparent(st.Transparent())
+	srcs, err := parseTransparent(st.allowedTransparent())
 	if err != nil {
 		log.Warn("ignoring invalid transparent sources", "err", err)
 	}
@@ -360,19 +360,47 @@ func runNFT(script string) error {
 
 func applyNFT(ifname string, st *State, mtu int, log *slog.Logger) bool {
 	if _, err := exec.LookPath("nft"); err != nil {
-		log.Warn("nft not installed: skipping MSS clamping, masquerade and the tunnel traffic filter")
+		log.Error("nft not installed: skipping MSS clamping, masquerade and the tunnel traffic filter, so the allowlist is NOT enforced on this host; install nftables or use netstack mode")
+		st.reach.setUnfiltered(true)
 		return false
 	}
 	err := runNFT(nftScript(ifname, st, mtu))
 	if err == nil {
+		st.reach.setUnfiltered(false)
 		return true
 	}
-	log.Warn("nftables setup failed; retrying without the tunnel traffic filter", "err", err)
+	log.Error("nftables setup failed; retrying without the tunnel traffic filter, so the allowlist is NOT enforced on this host", "err", err)
+	st.reach.setUnfiltered(true)
 	if err := runNFT(nftRules(ifname, st, mtu, false)); err != nil {
 		log.Warn("nftables setup failed", "err", err)
 		return false
 	}
 	return true
+}
+
+// hostRoutes are the host's routes other than the default route and those
+// of the tunnel interface itself.
+func hostRoutes(ifname string) []netip.Prefix {
+	routes, err := netlink.RouteList(nil, netlink.FAMILY_ALL)
+	if err != nil {
+		return nil
+	}
+	own := 0
+	if lk, err := netlink.LinkByName(ifname); err == nil {
+		own = lk.Attrs().Index
+	}
+	var out []netip.Prefix
+	for _, r := range routes {
+		if r.Dst == nil || r.LinkIndex == own {
+			continue
+		}
+		a, ok := netip.AddrFromSlice(r.Dst.IP)
+		bits, _ := r.Dst.Mask.Size()
+		if ok && bits > 0 {
+			out = append(out, netip.PrefixFrom(a.Unmap(), bits))
+		}
+	}
+	return out
 }
 
 // reapplyNFT refreshes the MSS clamp after an MTU change.

@@ -55,10 +55,11 @@ func transitPrefix(s string) (netip.Prefix, bool) {
 }
 
 // privateTransit reports whether s is a usable Address in shared or private
-// address space, the only ranges a running connector moves a transit to.
+// IPv4 space, the only ranges a running connector moves a transit to (the
+// host's tunnel filter is IPv4).
 func privateTransit(s string) bool {
 	p, ok := transitPrefix(s)
-	return ok && (sharedAddressSpace.Contains(p.Addr()) || p.Addr().IsPrivate())
+	return ok && p.Addr().Is4() && (sharedAddressSpace.Contains(p.Addr()) || p.Addr().IsPrivate())
 }
 
 // hostOnly reports addresses that mean this machine, or its cloud provider,
@@ -122,21 +123,31 @@ func transparentAddr(s string) (netip.AddrPort, bool) {
 	return ap, true
 }
 
-// forwardPrefixes are the destinations the edges may reach through this
-// host: the site subnets and the transparent L4 sources, leaving out
-// prefixes inside another one.
-func (s *State) forwardPrefixes() []netip.Prefix {
-	var all []netip.Prefix
+// subnetPrefixes are the edges' Subnets as prefixes.
+func (s *State) subnetPrefixes() []netip.Prefix {
+	var out []netip.Prefix
 	for _, v := range s.Subnets() {
 		if p, err := netip.ParsePrefix(v); err == nil {
-			all = append(all, p.Masked())
+			out = append(out, p.Masked())
 		}
 	}
+	return out
+}
+
+// asked are the destinations the edges ask for: the site subnets and the
+// transparent L4 sources.
+func (s *State) asked() []netip.Prefix {
+	all := s.subnetPrefixes()
 	for _, v := range s.Transparent() {
 		if ap, ok := transparentAddr(v); ok {
 			all = append(all, netip.PrefixFrom(ap.Addr(), 32))
 		}
 	}
+	return all
+}
+
+// outermost sorts prefixes widest first, leaving out those inside another.
+func outermost(all []netip.Prefix) []netip.Prefix {
 	slices.SortFunc(all, func(a, b netip.Prefix) int {
 		return cmp.Or(cmp.Compare(a.Bits(), b.Bits()), a.Addr().Compare(b.Addr()))
 	})
@@ -147,6 +158,62 @@ func (s *State) forwardPrefixes() []netip.Prefix {
 		}
 	}
 	return out
+}
+
+// forwardPrefixes are the destinations the edges may reach through this
+// host: what they ask for, inside the local allowlist.
+func (s *State) forwardPrefixes() []netip.Prefix {
+	var all []netip.Prefix
+	for _, p := range s.asked() {
+		all = append(all, s.reach.narrow(p)...)
+	}
+	return outermost(all)
+}
+
+// allowedSubnets are the edges' Subnets inside the local allowlist.
+func (s *State) allowedSubnets() []netip.Prefix {
+	var all []netip.Prefix
+	for _, p := range s.subnetPrefixes() {
+		all = append(all, s.reach.narrow(p)...)
+	}
+	return outermost(all)
+}
+
+// allowedTransparent are the transparent sources inside the local allowlist.
+func (s *State) allowedTransparent() []string {
+	return slices.DeleteFunc(slices.Clone(s.Transparent()), func(v string) bool {
+		ap, ok := transparentAddr(v)
+		return !ok || len(s.reach.narrow(netip.PrefixFrom(ap.Addr(), 32))) == 0
+	})
+}
+
+// refused are the destinations the edges ask for that the local allowlist
+// does not fully cover.
+func (s *State) refused() []string {
+	var out []string
+	for _, p := range outermost(s.asked()) {
+		inside := s.reach != nil && slices.ContainsFunc(s.reach.nets, func(n netip.Prefix) bool {
+			return n.Bits() <= p.Bits() && n.Contains(p.Addr())
+		})
+		if !inside {
+			out = append(out, p.String())
+		}
+	}
+	return out
+}
+
+// transitClash returns the local route a transit address would take over.
+func (s *State) transitClash(addr string) (netip.Prefix, bool) {
+	p, ok := transitPrefix(addr)
+	if !ok || s.routes == nil {
+		return netip.Prefix{}, false
+	}
+	for _, r := range s.routes() {
+		if r.Overlaps(p.Masked()) {
+			return r, true
+		}
+	}
+	return netip.Prefix{}, false
 }
 
 // reachTargets are the Targets this host tests: addresses inside the

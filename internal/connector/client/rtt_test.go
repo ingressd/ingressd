@@ -230,6 +230,7 @@ func TestSnapshotBestByRank(t *testing.T) {
 func TestOwnerByRankWithHysteresis(t *testing.T) {
 	s, e, l := rttSession(t)
 	s.st.Edges[0].Config.Transparent = []string{"tcp/192.168.0.17:25565"}
+	s.st.reach = reachOf("192.168.0.0/24")
 	for _, x := range e {
 		l.up[x.key] = true
 	}

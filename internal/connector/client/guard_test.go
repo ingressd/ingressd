@@ -62,6 +62,7 @@ func TestCheckConfig(t *testing.T) {
 		"endpoint": func(c *proto.TunnelConfig) { c.Endpoint = "no port" },
 		"address":  func(c *proto.TunnelConfig) { c.Address = "nope" },
 		"public":   func(c *proto.TunnelConfig) { c.Address = "198.51.100.2/30" },
+		"ipv6":     func(c *proto.TunnelConfig) { c.Address = "fd00::2/64" },
 	} {
 		tc := good
 		change(&tc)
@@ -142,7 +143,7 @@ func TestNetstackStartsWithBadSubnet(t *testing.T) {
 }
 
 func TestForwardPrefixes(t *testing.T) {
-	st := &State{Edges: []EdgeState{
+	st := &State{reach: reachOf("0.0.0.0/0"), Edges: []EdgeState{
 		{Config: proto.TunnelConfig{Subnets: []string{"192.168.1.5/24", "192.168.1.17/32", "10.0.0.9/32", "bad"}}},
 		{Config: proto.TunnelConfig{Subnets: []string{"10.0.0.0/8"}, Transparent: []string{"tcp/172.16.0.4:25565", "tcp/10.1.1.1:1"}}},
 	}}
@@ -157,7 +158,7 @@ func TestForwardPrefixes(t *testing.T) {
 
 func TestReachTargets(t *testing.T) {
 	targets := []string{"192.168.1.5:80", "192.168.2.5:80", "127.0.0.1:80", "169.254.169.254:80", "nas.example.test:80"}
-	st := &State{Edges: []EdgeState{{Config: proto.TunnelConfig{
+	st := &State{reach: reachOf("0.0.0.0/0"), Edges: []EdgeState{{Config: proto.TunnelConfig{
 		Subnets: []string{"192.168.1.0/24", "127.0.0.0/8", "169.254.169.254/32"}, Targets: targets,
 	}}}}
 	if got := st.reachTargets(); !slices.Equal(got, []string{"192.168.1.5:80"}) {

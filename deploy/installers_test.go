@@ -44,6 +44,28 @@ func TestInstallersVerifyBeforeRunning(t *testing.T) {
 	}
 }
 
+// The connector installer sets up nft before the service first starts, and
+// keeps the package manager off a piped script's standard input.
+func TestConnectorInstallerAddsNFT(t *testing.T) {
+	b, err := os.ReadFile("install-connector.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	guard := `if [ "$ROOT" -eq 1 ] && [ "$SYSTEMD" -eq 1 ] && ! have_nft; then`
+	call := "install_nft </dev/null >/dev/null 2>&1 || true"
+	service := `"$EXE" "$@" install-service`
+	at, install, svc := strings.Index(s, guard), strings.Index(s, call), strings.Index(s, service)
+	if at < 0 || install < at || svc < install {
+		t.Errorf("guard at %d, install at %d, service at %d", at, install, svc)
+	}
+	for _, want := range []string{"apt-get install -y nftables", "dnf install -y nftables", "apk add --no-cache nftables"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("no %q", want)
+		}
+	}
+}
+
 // install-node.sh embeds the control-plane unit: its sandbox must match
 // deploy/systemd/ingressd.service.
 func TestInstallNodeUnitMatches(t *testing.T) {

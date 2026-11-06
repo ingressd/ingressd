@@ -46,7 +46,7 @@ func TestNFTScript(t *testing.T) {
 }
 
 func TestNFTTunnelFilter(t *testing.T) {
-	st := &State{Edges: []EdgeState{{Config: proto.TunnelConfig{
+	st := &State{reach: reachOf("0.0.0.0/0", "::/0"), Edges: []EdgeState{{Config: proto.TunnelConfig{
 		Subnets:     []string{"192.168.1.0/24", "192.168.1.5/32", "10.0.0.9/32", "fd00::/64"},
 		Transparent: []string{"tcp/172.16.0.4:25565"},
 	}}}}
@@ -74,6 +74,21 @@ func TestNFTTunnelFilter(t *testing.T) {
 	st.Edges[0].Config.Subnets = []string{"0.0.0.0/0"}
 	if s = nftScript("ingressd0", st, 1420); strings.Contains(s, "drop") {
 		t.Errorf("default route:\n%s", s)
+	}
+
+	// The local allowlist decides, whatever the edge asks for.
+	st.reach = reachOf("192.168.1.0/24")
+	s = nftScript("ingressd0", st, 1420)
+	if !strings.Contains(s, "ip daddr != { 192.168.1.0/24 } drop") {
+		t.Errorf("edge asks for everything:\n%s", s)
+	}
+	st.Edges[0].Config.Subnets = []string{"192.168.0.0/16"}
+	if s = nftScript("ingressd0", st, 1420); !strings.Contains(s, "ip daddr != { 192.168.1.0/24 } drop") {
+		t.Errorf("edge asks for a wider network:\n%s", s)
+	}
+	st.reach = nil
+	if s = nftScript("ingressd0", st, 1420); !strings.Contains(s, "\t\tiifname \"ingressd0\" drop\n") {
+		t.Errorf("no list in effect:\n%s", s)
 	}
 
 	if s = nftRules("ingressd0", &State{Masquerade: true, Edges: []EdgeState{{Config: proto.TunnelConfig{Address: "100.64.0.6/30"}}}}, 1420, false); strings.Contains(s, "drop") || !strings.Contains(s, "masquerade") {

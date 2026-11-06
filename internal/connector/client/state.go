@@ -59,6 +59,14 @@ type State struct {
 	SmartDNSConfig json.RawMessage `json:"smartdns_config,omitempty"`
 	// RescueIssued is the newest edge list accepted from the panel (rescue.go).
 	RescueIssued time.Time `json:"rescue_issued,omitempty"`
+	// AllowlistPinned is set once the allowlist exists (allowlist.go): from
+	// then on a missing file is a fault, not a first start.
+	AllowlistPinned bool `json:"allowlist_pinned,omitempty"`
+
+	// reach is the allowlist in effect for this run.
+	reach *localReach
+	// routes lists the host's routes (TUN mode; nil elsewhere).
+	routes func() []netip.Prefix
 }
 
 // EdgeState is one edge (node) of the site.
@@ -168,6 +176,9 @@ type Status struct {
 	LastPoll  time.Time    `json:"last_poll,omitempty"`
 	PollError string       `json:"poll_error,omitempty"`
 	Edges     []EdgeStatus `json:"edges,omitempty"`
+	// LANFilterOff: TUN mode could not install its filter, so the allowlist
+	// is not being enforced on this host.
+	LANFilterOff bool `json:"lan_filter_off,omitempty"`
 }
 
 // EdgeStatus is the live state of one edge.
