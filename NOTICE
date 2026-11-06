@@ -15,3 +15,10 @@ Adapted source code:
   Copyright (C) WireGuard LLC. All Rights Reserved.
   Licensed under the MIT License; the licence text is reproduced in the
   header of that file.
+
+Bundled rule set:
+
+- edge/third_party/coraza-coreruleset contains OWASP CRS 4.25.2 (Copyright
+  the OWASP CRS project) and coraza-coreruleset (Copyright the OWASP Coraza
+  contributors), both licensed under the Apache License, Version 2.0. Their
+  licence texts are kept in that directory.

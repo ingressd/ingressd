@@ -41,7 +41,8 @@ type IdentityProvider struct {
 	ClientSecret string `yaml:"client_secret,omitempty"`
 	// Tenant (microsoft) restricts who can sign in: common (personal and
 	// work accounts, the default), organizations (work accounts only),
-	// consumers (personal accounts only) or one tenant ID.
+	// consumers (personal accounts only) or one tenant ID. With any but one tenant ID,
+	// microsoft_role grants access only alongside a microsoft_tenant requirement.
 	Tenant string `yaml:"tenant,omitempty"`
 	// APIKey (steam, secret://name) is a Steam Web API key; it is needed
 	// only for steam_group and steam_app selectors.
@@ -190,6 +191,17 @@ func (c *Config) validateProviders(v *validator, prefix string, a *Access) {
 // ValidMicrosoftTenant reports whether t is a usable tenant setting.
 func ValidMicrosoftTenant(t string) bool {
 	return t == "common" || t == "organizations" || t == "consumers" || guidRe.MatchString(t)
+}
+
+// AttrMicrosoftRoleUnbound marks a role from a provider open to many tenants.
+// It always counts against a user (exclude, deny), but grants access only where
+// the policy also requires a microsoft_tenant.
+const AttrMicrosoftRoleUnbound = "microsoft_role_unbound"
+
+// MicrosoftSingleTenant reports whether t limits sign-in to one organization's
+// directory: a tenant ID other than the personal accounts tenant.
+func MicrosoftSingleTenant(t string) bool {
+	return guidRe.MatchString(t) && t != MicrosoftConsumersTenant
 }
 
 // ownPortal reports whether this node runs the sign-in portal itself (so
@@ -418,22 +430,24 @@ func (c *Config) loginMethodWarnings() []string {
 	return out
 }
 
-// microsoftRoleWarnings advises tying role policies to a tenant: unless the
-// provider is limited to one tenant, a role value alone does not say which
-// directory assigned it.
+// microsoftRoleWarnings reports allow policies whose role selectors cannot
+// grant access: that needs a provider limited to one tenant, or a required
+// microsoft_tenant. An external portal's provider settings are not visible here.
 func (c *Config) microsoftRoleWarnings() []string {
-	if a := c.Access; a != nil && guidRe.MatchString(a.Providers[MethodMicrosoft].Tenant) {
+	a := c.Access
+	if !ownPortal(a) || MicrosoftSingleTenant(a.Providers[MethodMicrosoft].Tenant) {
 		return nil
 	}
 	kind := func(k string) func(Selector) bool {
 		return func(s Selector) bool { return s.Kind() == k }
 	}
+	role := kind("microsoft_role")
 	var out []string
 	for _, name := range sortedKeys(c.Policies) {
 		p := c.Policies[name]
-		uses := slices.ContainsFunc(p.Include, kind("microsoft_role")) || slices.ContainsFunc(p.Require, kind("microsoft_role"))
-		if uses && !slices.ContainsFunc(p.Require, kind("microsoft_tenant")) {
-			out = append(out, fmt.Sprintf("policies.%s: microsoft_role is not tied to a tenant; add a microsoft_tenant selector under require, "+
+		uses := slices.ContainsFunc(p.Include, role) || slices.ContainsFunc(p.Require, role)
+		if uses && p.Action != ActionDeny && !slices.ContainsFunc(p.Require, kind("microsoft_tenant")) {
+			out = append(out, fmt.Sprintf("policies.%s: microsoft_role grants nothing here; add a microsoft_tenant selector under require, "+
 				"or set access.providers.microsoft.tenant to your tenant ID", name))
 		}
 	}

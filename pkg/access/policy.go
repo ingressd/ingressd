@@ -137,9 +137,11 @@ func NewEngine(cfg *config.Config) *Engine {
 	e := &Engine{cfg: cfg, policies: map[string]*policy{}}
 	for name, p := range cfg.Policies {
 		cp := &policy{name: name, p: p, version: policyVersion(cfg, p)}
-		cp.include = e.matchers(p.Include)
-		cp.require = e.matchers(p.Require)
-		cp.exclude = e.matchers(p.Exclude)
+		// An unbound role can only hurt a user, unless the policy pins the tenant.
+		unbound := p.Action == config.ActionDeny || slices.ContainsFunc(p.Require, func(s config.Selector) bool { return s.Kind() == "microsoft_tenant" })
+		cp.include = e.roleMatchers(p.Include, unbound)
+		cp.require = e.roleMatchers(p.Require, unbound)
+		cp.exclude = e.roleMatchers(p.Exclude, true)
 		e.policies[name] = cp
 	}
 	return e
@@ -149,6 +151,29 @@ func (e *Engine) matchers(sels []config.Selector) []matcher {
 	ms := make([]matcher, 0, len(sels))
 	for _, s := range sels {
 		ms = append(ms, e.matcher(s))
+	}
+	return ms
+}
+
+// roleMatchers is matchers, with microsoft_role also matching unbound roles if
+// unbound is set.
+func (e *Engine) roleMatchers(sels []config.Selector, unbound bool) []matcher {
+	ms := e.matchers(sels)
+	if !unbound {
+		return ms
+	}
+	for i, s := range sels {
+		if s.Kind() != "microsoft_role" {
+			continue
+		}
+		bound := ms[i]
+		attrs := make([]string, 0, len(s.MicrosoftRole))
+		for _, v := range s.MicrosoftRole {
+			attrs = append(attrs, config.Attr(config.AttrMicrosoftRoleUnbound, v))
+		}
+		ms[i] = func(id Identity) bool {
+			return bound(id) || slices.ContainsFunc(id.Attrs, func(a string) bool { return slices.Contains(attrs, a) })
+		}
 	}
 	return ms
 }

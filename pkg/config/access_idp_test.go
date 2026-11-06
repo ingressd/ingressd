@@ -208,6 +208,15 @@ apps:
 		t.Error("warning with a single-tenant provider")
 	}
 	if warned(cfg("", ", require: [{ microsoft_tenant: ["+tid+"] }]")) {
-		t.Error("warning with a required tenant")
+		t.Error("warning with a required tenant on a multi-tenant provider")
+	}
+	if !warned(cfg(", tenant: organizations", "")) {
+		t.Error("no warning with organizations")
+	}
+	if !warned(cfg(", tenant: "+MicrosoftConsumersTenant, "")) {
+		t.Error("no warning with the personal accounts tenant")
+	}
+	if !warned(cfg("", ", exclude: [{ microsoft_role: [Guest] }]")) {
+		t.Error("no warning for a role under exclude")
 	}
 }
