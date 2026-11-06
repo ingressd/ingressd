@@ -31,6 +31,8 @@ const DefaultInterface = "ingressd0"
 const (
 	transparentTable    = 5182
 	transparentPriority = 5182
+	// forwardHoldPriority is ahead of the main table and the transparent rules.
+	forwardHoldPriority = transparentPriority - 1
 )
 
 // kernelLink is kernel WireGuard configured through wgctrl.
@@ -253,6 +255,7 @@ func configureInterface(name string, st *State, log *slog.Logger) (func(), error
 		for _, r := range rules {
 			_ = netlink.RuleDel(r)
 		}
+		_ = holdForwarding(name, false)
 		if nftOK {
 			_ = runNFT("add table ip ingressd_connector\ndelete table ip ingressd_connector\n")
 		}
@@ -358,24 +361,56 @@ func runNFT(script string) error {
 	return nil
 }
 
+// applyNFT installs the nftables table and reports whether it did. Without
+// its filter a usable list is logged and reported, so that a host lacking nft
+// keeps working; a list that is not usable forwards nothing all the same.
 func applyNFT(ifname string, st *State, mtu int, log *slog.Logger) bool {
+	installed, filtered := installNFT(ifname, st, mtu, log)
+	st.reach.setUnfiltered(!filtered)
+	hold := !filtered && !st.reach.usable()
+	if err := holdForwarding(ifname, hold); err != nil {
+		log.Error("could not change forwarding from the tunnel", "stop", hold, "err", err)
+	} else if hold {
+		log.Error("no usable allowlist and no tunnel traffic filter: forwarding nothing from the tunnel to the LAN")
+	}
+	return installed
+}
+
+func installNFT(ifname string, st *State, mtu int, log *slog.Logger) (installed, filtered bool) {
 	if _, err := exec.LookPath("nft"); err != nil {
 		log.Error("nft not installed: skipping MSS clamping, masquerade and the tunnel traffic filter, so the allowlist is NOT enforced on this host; install nftables or use netstack mode")
-		st.reach.setUnfiltered(true)
-		return false
+		return false, false
 	}
 	err := runNFT(nftScript(ifname, st, mtu))
 	if err == nil {
-		st.reach.setUnfiltered(false)
-		return true
+		return true, true
 	}
 	log.Error("nftables setup failed; retrying without the tunnel traffic filter, so the allowlist is NOT enforced on this host", "err", err)
-	st.reach.setUnfiltered(true)
 	if err := runNFT(nftRules(ifname, st, mtu, false)); err != nil {
 		log.Warn("nftables setup failed", "err", err)
-		return false
+		return false, false
 	}
-	return true
+	return true, false
+}
+
+// holdForwarding stops or resumes routing what arrives on the tunnel to
+// anywhere else. The local table is looked up first, so traffic addressed to
+// this host, and with it the control channel, is not affected. It needs
+// neither nft nor a writable /proc/sys.
+func holdForwarding(ifname string, on bool) error {
+	for _, family := range []int{netlink.FAMILY_V4, netlink.FAMILY_V6} {
+		r := netlink.NewRule()
+		r.Family, r.Priority, r.IifName, r.Type = family, forwardHoldPriority, ifname, unix.FR_ACT_BLACKHOLE
+		_ = netlink.RuleDel(r)
+		if !on {
+			continue
+		}
+		// A host without IPv6 has nothing to hold there.
+		if err := netlink.RuleAdd(r); err != nil && family == netlink.FAMILY_V4 {
+			return err
+		}
+	}
+	return nil
 }
 
 // hostRoutes are the host's routes other than the default route and those

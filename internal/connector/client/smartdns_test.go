@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/netip"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -322,6 +323,44 @@ func TestRescueAddsEdgesAndChecksTheList(t *testing.T) {
 	tampered.Edges[0].Endpoint = "198.51.100.66:51820"
 	if err := s.applyRescue(tampered, me); err == nil {
 		t.Fatal("tampered list accepted")
+	}
+}
+
+func TestRescueChecksTransitAddresses(t *testing.T) {
+	_, s := newTestController(t)
+	s.restartEdge = map[string]bool{}
+	s.refresh = make(chan struct{}, 1)
+	s.st.routes = func() []netip.Prefix { return []netip.Prefix{netip.MustParsePrefix("192.168.0.0/24")} }
+	_, key, _ := ed25519.GenerateKey(nil)
+	me := s.priv.PublicKey().String()
+	newKey := func() string {
+		k, _ := wgtypes.GeneratePrivateKey()
+		return k.PublicKey().String()
+	}
+	public, clash, good, known := newKey(), newKey(), newKey(), newKey()
+	s.st.Edges = append(s.st.Edges, EdgeState{Config: proto.TunnelConfig{EdgePublicKey: known, Endpoint: "198.51.100.1:51830", Address: "203.0.113.22/30"}})
+	e := nodeproto.SignedEdges{Connector: me, Issued: time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC), Edges: []nodeproto.RescueEdge{
+		{Endpoint: "203.0.113.9:51830", EdgePublicKey: public, Transit: "203.0.113.8/30"},
+		{Endpoint: "203.0.113.10:51830", EdgePublicKey: clash, Transit: "192.168.0.8/30"},
+		{Endpoint: "203.0.113.11:51830", EdgePublicKey: good, Transit: "100.112.0.8/30"},
+		{Endpoint: "203.0.113.12:51830", EdgePublicKey: known, Transit: "203.0.113.20/30"},
+	}}
+	nodeproto.SignEdges(&e, key)
+	if err := s.applyRescue(e, me); err != nil {
+		t.Fatal(err)
+	}
+	if s.st.Edge(public) != nil {
+		t.Error("public transit added")
+	}
+	if s.st.Edge(clash) != nil {
+		t.Error("transit over a local route added")
+	}
+	if s.st.Edge(good) == nil {
+		t.Error("usable edge skipped")
+	}
+	// An edge already in use moves; its transit stays what it was.
+	if es := s.st.Edge(known); es.Config.Endpoint != "203.0.113.12:51830" || es.Config.Address != "203.0.113.22/30" {
+		t.Errorf("known edge %+v", es.Config)
 	}
 }
 

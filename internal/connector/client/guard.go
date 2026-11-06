@@ -202,6 +202,13 @@ func (s *State) refused() []string {
 	return out
 }
 
+// reportReach adds the allowlist's state to a health report.
+func (s *State) reportReach(h *proto.Health) {
+	h.RefusedSubnets = s.refused()
+	h.AllowlistError = s.reach.report()
+	h.LANFilterOff = s.reach != nil && s.reach.unfiltered.Load()
+}
+
 // transitClash returns the local route a transit address would take over.
 func (s *State) transitClash(addr string) (netip.Prefix, bool) {
 	p, ok := transitPrefix(addr)

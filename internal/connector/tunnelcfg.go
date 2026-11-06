@@ -73,7 +73,7 @@ func TunnelConfig(cfg *config.Config, keys EdgeKeys, name string) (proto.TunnelC
 		Endpoint:      net.JoinHostPort(host, strconv.Itoa(t.ListenPort)),
 		Address:       netip.PrefixFrom(render.SiteAddr(transit), transit.Bits()).String(),
 		EdgeAddress:   render.EdgeAddr(transit).String(),
-		Subnets:       cfg.TunnelRoutes(name), // what the connector forwards to
+		Subnets:       connectorSubnets(cfg, name), // what the connector forwards to
 		Keepalive:     t.Keepalive,
 		MTU:           render.DefaultMTU,
 		FallbackWS:    t.FallbackWS,
@@ -94,6 +94,26 @@ func TunnelConfig(cfg *config.Config, keys EdgeKeys, name string) (proto.TunnelC
 	sum := sha256.Sum256(b)
 	tc.Revision = hex.EncodeToString(sum[:8])
 	return tc, nil
+}
+
+// connectorSubnets are the tunnel's routes. Under a /0 they also name each
+// published address, which the route itself does not: a connector never pins
+// a /0 into its allowlist, so these are what it keeps.
+func connectorSubnets(cfg *config.Config, tunnel string) []string {
+	routes := cfg.TunnelRoutes(tunnel)
+	everything := slices.ContainsFunc(cfg.Tunnels[tunnel].Subnets, func(s string) bool {
+		p, err := netip.ParsePrefix(s)
+		return err == nil && p.Bits() == 0
+	})
+	if !everything {
+		return routes
+	}
+	for _, a := range cfg.TunnelAddresses(tunnel) {
+		if r := netip.PrefixFrom(a, a.BitLen()).String(); !slices.Contains(routes, r) {
+			routes = append(routes, r)
+		}
+	}
+	return routes
 }
 
 // Targets lists the distinct host:port origins reached through a tunnel.

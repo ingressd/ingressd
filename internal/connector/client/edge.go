@@ -666,8 +666,7 @@ func (e *edge) reportLoop(ctx context.Context) {
 		}
 		cp := e.s.stateCopy()
 		h.Reachability = testReachability(ctx, cp.reachTargets())
-		h.RefusedSubnets = cp.refused()
-		h.AllowlistError = cp.reach.report()
+		cp.reportReach(&h)
 		h.Edges = e.s.edgeReports()
 		if sd := e.s.r.sd; sd != nil {
 			h.SmartDNS = sd.report()

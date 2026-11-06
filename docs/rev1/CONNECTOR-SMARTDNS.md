@@ -61,7 +61,7 @@ A self-hosted node keeps only one role: letting its own connector sites leave fr
 
 - `smartdns.exit` on the node: `{ country: NL, sites: [<tunnel>, …], upstream?, checks? }` (present = enabled). One exit per node (it has one egress: its default route). `sites` lists the connector tunnels allowed to use it; the panel fills it with the org's connector sites attached to that node. `country` is what the user expects; the node checks it (below).
 - **Egress**: ordinary sockets of the node's default route, as the unprivileged `ingressd` user, connecting only to public unicast addresses (`checkConnect` / `publicUnicast` as today: never the LAN, the mesh, metadata or other tunnels). Names are resolved by the node's `upstream` resolvers (default 1.1.1.1, 9.9.9.9) from the node's location.
-- **Metering**: the exit counts each site's relayed bytes and connections and reports them as deltas in the node's usage message (`exit`, ignored by older panels). A site over 500 GiB or 500,000 connections in a day is logged, once a day; the exit stays open.
+- **Metering**: the exit counts each site's relayed bytes and connections and reports them as deltas in the node's usage message (`exit`, ignored by older panels). High daily usage is logged, once a day.
 - **Tunnel exit API** on the tunnel's edge transit address, replacing the mesh exit API:
   - `POST :51901/v1/resolve {name}` → answers resolved at the node's location, `exit_up`.
   - `GET :51901/v1/exit` → the node exit's health (up, egress, country, message).

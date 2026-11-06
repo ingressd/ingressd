@@ -194,8 +194,9 @@ func ValidMicrosoftTenant(t string) bool {
 }
 
 // AttrMicrosoftRoleUnbound marks a role from a provider open to many tenants.
-// It always counts against a user (exclude, deny), but grants access only where
-// the policy also requires a microsoft_tenant.
+// It always counts against a user (a deny, or an exclude on an allow), but works
+// for one (an allow, or an exclude on a deny) only where the policy also requires
+// a microsoft_tenant.
 const AttrMicrosoftRoleUnbound = "microsoft_role_unbound"
 
 // MicrosoftSingleTenant reports whether t limits sign-in to one organization's

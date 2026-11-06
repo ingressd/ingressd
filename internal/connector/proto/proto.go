@@ -155,6 +155,9 @@ type Health struct {
 	// means the site needs `ingressd-connector allow` on its host (additive).
 	RefusedSubnets []string `json:"refused_subnets,omitempty"`
 	AllowlistError string   `json:"allowlist_error,omitempty"`
+	// LANFilterOff: TUN mode could not install its filter, so a usable
+	// allowlist is not being enforced on this host (additive).
+	LANFilterOff bool `json:"lan_filter_off,omitempty"`
 }
 
 // EdgeReport is one edge as the connector sees it. RTTMillis is an EWMA of

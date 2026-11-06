@@ -3,8 +3,15 @@
 package client
 
 import (
+	"net"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 
 	"github.com/ingressd/ingressd/internal/connector/proto"
 )
@@ -93,5 +100,107 @@ func TestNFTTunnelFilter(t *testing.T) {
 
 	if s = nftRules("ingressd0", &State{Masquerade: true, Edges: []EdgeState{{Config: proto.TunnelConfig{Address: "100.64.0.6/30"}}}}, 1420, false); strings.Contains(s, "drop") || !strings.Contains(s, "masquerade") {
 		t.Errorf("without the filter:\n%s", s)
+	}
+}
+
+// netnsWithTunnel runs the test on a new network namespace holding the tunnel
+// interface and a LAN, forwarding between them.
+func netnsWithTunnel(t *testing.T) {
+	t.Helper()
+	if os.Geteuid() != 0 {
+		t.Skip("needs root")
+	}
+	// Left locked: the thread ends with the test, and its namespace with it.
+	runtime.LockOSThread()
+	if err := unix.Unshare(unix.CLONE_NEWNET); err != nil {
+		t.Skip(err)
+	}
+	for name, addr := range map[string]string{"ingressd0": "100.64.0.6/30", "lan0": "192.168.1.1/24"} {
+		lk := &netlink.Dummy{LinkAttrs: netlink.LinkAttrs{Name: name}}
+		if err := netlink.LinkAdd(lk); err != nil {
+			t.Skip(err)
+		}
+		a, _ := netlink.ParseAddr(addr)
+		if err := netlink.AddrAdd(lk, a); err != nil {
+			t.Fatal(err)
+		}
+		if err := netlink.LinkSetUp(lk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// fromTunnel looks up the route of a packet arriving on the tunnel.
+func fromTunnel(dst string) (*netlink.Route, bool) {
+	rs, err := netlink.RouteGetWithOptions(net.ParseIP(dst), &netlink.RouteGetOptions{Iif: "ingressd0", SrcAddr: net.ParseIP("100.64.0.5")})
+	if err != nil || len(rs) == 0 {
+		return nil, false
+	}
+	return &rs[0], true
+}
+
+func TestForwardingWithoutTheFilter(t *testing.T) {
+	netnsWithTunnel(t)
+	stub := func(body string) string {
+		dir := t.TempDir()
+		if body != "" {
+			if err := os.WriteFile(filepath.Join(dir, "nft"), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dir
+	}
+	noNFT, brokenNFT, filterRefused, workingNFT := stub(""), stub("exit 1"), stub(`grep -q drop && exit 1; exit 0`), stub("cat >/dev/null")
+	damaged := &localReach{problem: "allowlist file is missing"}
+	partly := reachOf("192.168.1.0/24")
+	partly.problem = "ignoring invalid allowlist entries: x"
+	for _, tc := range []struct {
+		name     string
+		path     string
+		reach    *localReach
+		forwards bool
+		off      bool
+	}{
+		{"healthy list, no nft", noNFT, reachOf("192.168.1.0/24"), true, true},
+		{"healthy list, nft fails", brokenNFT, reachOf("192.168.1.0/24"), true, true},
+		{"damaged list, no nft", noNFT, damaged, false, true},
+		{"partly damaged list, no nft", noNFT, partly, false, true},
+		{"empty list, no nft", noNFT, reachOf(), false, true},
+		{"no list, nft fails", brokenNFT, damaged, false, true},
+		{"empty list, filter refused", filterRefused, reachOf(), false, true},
+		{"healthy list again", noNFT, reachOf("192.168.1.0/24"), true, true},
+		{"damaged list, working nft", workingNFT, damaged, true, false}, // the filter drops it
+	} {
+		// No subtests: they would run on another thread, outside the namespace.
+		path := tc.path + ":/usr/bin:/bin"
+		if tc.path == noNFT {
+			path = tc.path
+		}
+		t.Setenv("PATH", path)
+		tc.reach.unfiltered.Store(false)
+		applyNFT("ingressd0", &State{reach: tc.reach}, 1420, quiet)
+		if got := tc.reach.unfiltered.Load(); got != tc.off {
+			t.Errorf("%s: filter off = %v, want %v", tc.name, got, tc.off)
+		}
+		if _, got := fromTunnel("192.168.1.10"); got != tc.forwards {
+			t.Errorf("%s: forwards = %v, want %v", tc.name, got, tc.forwards)
+		}
+		// The control channel's replies and the edge's ping end here.
+		if r, ok := fromTunnel("100.64.0.6"); !ok || r.Type != unix.RTN_LOCAL {
+			t.Errorf("%s: transit address: %+v, %v", tc.name, r, ok)
+		}
+		// This host's own traffic does not go through the rule.
+		if rs, err := netlink.RouteGet(net.ParseIP("192.168.1.10")); err != nil || len(rs) == 0 {
+			t.Errorf("%s: host route: %v, %v", tc.name, rs, err)
+		}
+	}
+	if err := holdForwarding("ingressd0", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := fromTunnel("192.168.1.10"); !ok {
+		t.Error("forwarding still held")
 	}
 }

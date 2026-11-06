@@ -72,11 +72,10 @@ func newRootCmd() *cobra.Command {
 			"A join string of \"-\" is read from standard input, which keeps the\n" +
 			"token out of the process list (the installer does this).\n\n" +
 			"The edges can only reach networks on this host's allowlist. By default that\n" +
-			"is the private networks plus what the site is configured for right now, so a\n" +
-			"compromised edge can reach private LAN addresses, including this host's own\n" +
-			"LAN address. --allow replaces the default with a tighter list. Anything\n" +
-			"outside the list, such as an origin on a public address, needs\n" +
-			"`ingressd-connector allow add`.",
+			"is the private networks, this host's own LAN addresses among them, plus what\n" +
+			"the site is configured for right now. Use --allow to narrow it to the networks\n" +
+			"this site needs. Anything outside the list, such as an origin on a public\n" +
+			"address, needs `ingressd-connector allow add`.",
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 1 {

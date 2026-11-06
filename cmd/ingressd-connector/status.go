@@ -52,7 +52,7 @@ func printStatus(out io.Writer, st *client.State, s *client.Status, now time.Tim
 	}
 	fmt.Fprintf(w, "State:\t%s\n", state)
 	if s.LANFilterOff {
-		fmt.Fprintf(w, "LAN filter:\tNOT ENFORCED: nftables could not be set up, so the allowlist has no effect on this host\n")
+		fmt.Fprintf(w, "LAN filter:\tNOT ENFORCED: nftables could not be set up, so the allowlist has no effect on this host (a damaged or empty list forwards nothing)\n")
 	}
 	fmt.Fprintf(w, "Link:\t%s\n", s.Interface)
 	fmt.Fprintf(w, "Transport:\t%s %s\n", s.Transport, s.Endpoint)

@@ -158,6 +158,16 @@ func (s *session) applyRescue(e nodeproto.SignedEdges, connector string) error {
 			continue
 		}
 		es := s.st.Edge(sb.EdgePublicKey)
+		if es == nil {
+			if !privateTransit(sb.Address) {
+				s.log.Warn("skipping an edge from the panel: transit address is outside private address space", "edge", x.Endpoint, "address", sb.Address)
+				continue
+			}
+			if route, clash := s.st.transitClash(sb.Address); clash {
+				s.log.Warn("skipping an edge from the panel: transit address overlaps a local route", "edge", x.Endpoint, "address", sb.Address, "route", route)
+				continue
+			}
+		}
 		switch {
 		case es == nil:
 			s.st.Edges = append(s.st.Edges, EdgeState{URL: urlFromWS(sb.WSURL), Node: sb.Node, Learned: true, Config: siblingConfig(parent, sb)})

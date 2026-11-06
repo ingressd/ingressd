@@ -23,12 +23,12 @@ func newAllowCmd(statePath *string) *cobra.Command {
 		Long: "The allowlist is kept on this host and the edge cannot change it. The edges\n" +
 			"reach only what the site's configuration asks for and this list also allows.\n\n" +
 			"By default it holds the private networks (10.0.0.0/8, 172.16.0.0/12,\n" +
-			"192.168.0.0/16, fc00::/7) and what the site reached at its first start, so an\n" +
-			"origin on a private address added in the panel works with no step here. This\n" +
-			"means a compromised edge can reach private LAN addresses, including this\n" +
-			"host's own LAN address, unless `enroll --allow` set a tighter list. Loopback,\n" +
-			"the cloud metadata address and public networks are refused: publishing an\n" +
-			"origin on a public address needs `allow add`.\n\n" +
+			"192.168.0.0/16, fc00::/7), this host's own LAN addresses among them, and what\n" +
+			"the site reached at its first start, so an origin on a private address added\n" +
+			"in the panel works with no step here. Use `enroll --allow`, or `allow remove`\n" +
+			"and `allow add`, to narrow it to the networks this site needs. Loopback, the\n" +
+			"cloud metadata address and public networks are refused: publishing an origin\n" +
+			"on a public address needs `allow add`.\n\n" +
 			"Changing it needs the root or administrator rights that own the state file;\n" +
 			"a running connector applies the change within seconds by restarting its link.",
 	}

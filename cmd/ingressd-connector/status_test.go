@@ -56,7 +56,7 @@ func TestPrintStatusLANFilter(t *testing.T) {
 	now := time.Now()
 	st := &client.State{Mode: "tun"}
 	var b strings.Builder
-	s := &client.Status{Health: proto.Health{Time: now}, LANFilterOff: true}
+	s := &client.Status{Health: proto.Health{Time: now, LANFilterOff: true}}
 	if err := printStatus(&b, st, s, now); err != nil {
 		t.Fatal(err)
 	}

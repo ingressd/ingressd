@@ -72,9 +72,9 @@ type ExitServer struct {
 // use far fewer; the cap keeps one site from using up the node's sockets.
 const maxSiteStreams = 1024
 
-// A site past either limit in a day is logged, once a day. The exit stays
-// open: these are far above a household's streaming, which is what the exit
-// is for. A day of 4K video is under 200 GiB.
+// A site past either level in a day is logged, once a day. These are far
+// above a household's streaming, which is what the exit is for: a day of 4K
+// video is under 200 GiB.
 const (
 	exitAlertBytes  = 500 << 30
 	exitAlertConns  = 500_000

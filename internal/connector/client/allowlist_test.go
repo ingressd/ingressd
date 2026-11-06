@@ -91,6 +91,61 @@ func TestFirstStartPinsCurrentNetworks(t *testing.T) {
 	}
 }
 
+func TestFirstStartUnderADefaultRouteKeepsTheOrigins(t *testing.T) {
+	st, path := siteState(t, proto.TunnelConfig{
+		Subnets: []string{"0.0.0.0/0", "198.51.100.9/32"},
+		Targets: []string{"203.0.113.7:443", "203.0.113.8:80", "192.168.1.5:80", "169.254.169.254:80", "127.0.0.1:80", "origin.example:80"},
+	})
+	st.reach = openReach(path, st, quiet)
+	a, _, err := readAllowlist(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "198.51.100.9/32", "203.0.113.7/32", "203.0.113.8/32", "fc00::/7"}
+	if !slices.Equal(a.Networks, want) {
+		t.Errorf("pinned %v, want %v", a.Networks, want)
+	}
+	reachable := func(s string) bool {
+		_, ok := (&netstackTUN{allowed: st.allowedSubnets()}).target(tcpID(netip.MustParseAddr(s)))
+		return ok
+	}
+	if !reachable("203.0.113.7") || !reachable("198.51.100.9") {
+		t.Errorf("origins lost: %v", st.allowedSubnets())
+	}
+	if reachable("203.0.113.9") {
+		t.Errorf("forwards more than the origins: %v", st.allowedSubnets())
+	}
+	if got := st.reachTargets(); !slices.Contains(got, "203.0.113.7:443") {
+		t.Errorf("targets %v", got)
+	}
+	if got := st.refused(); !slices.Equal(got, []string{"0.0.0.0/0"}) {
+		t.Errorf("refused %v", got)
+	}
+}
+
+func TestPinLeavesOutTargetsTheSiteDoesNotRoute(t *testing.T) {
+	st, _ := siteState(t, proto.TunnelConfig{Subnets: []string{"198.51.100.0/24"}, Targets: []string{"198.51.100.4:80", "203.0.113.7:443"}})
+	if got := pinnedAllowlist(st).Networks; slices.Contains(got, "203.0.113.7/32") || slices.Contains(got, "198.51.100.4/32") {
+		t.Errorf("pinned %v", got)
+	}
+}
+
+func TestHealthCarriesTheFilterState(t *testing.T) {
+	st := &State{reach: reachOf("192.168.1.0/24")}
+	var h proto.Health
+	st.reportReach(&h)
+	if h.LANFilterOff {
+		t.Error("filter off by default")
+	}
+	st.reach.setUnfiltered(true)
+	st.reportReach(&h)
+	b, err := json.Marshal(Status{Health: h})
+	if err != nil || !h.LANFilterOff || !bytes.Contains(b, []byte(`"lan_filter_off":true`)) {
+		t.Errorf("%s %v", b, err)
+	}
+	(&State{}).reportReach(&h) // no list in effect
+}
+
 func TestDefaultListCoversPrivateNetworks(t *testing.T) {
 	k, _ := wgtypes.GeneratePrivateKey()
 	pub := k.PublicKey()

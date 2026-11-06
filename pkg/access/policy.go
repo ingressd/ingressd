@@ -80,6 +80,9 @@ func (e *Engine) ReferencedAttrs() map[string]bool {
 				for _, a := range s.Attrs() {
 					out[a] = true
 				}
+				for _, v := range s.MicrosoftRole {
+					out[config.Attr(config.AttrMicrosoftRoleUnbound, v)] = true
+				}
 			}
 		}
 	}
@@ -137,11 +140,13 @@ func NewEngine(cfg *config.Config) *Engine {
 	e := &Engine{cfg: cfg, policies: map[string]*policy{}}
 	for name, p := range cfg.Policies {
 		cp := &policy{name: name, p: p, version: policyVersion(cfg, p)}
-		// An unbound role can only hurt a user, unless the policy pins the tenant.
-		unbound := p.Action == config.ActionDeny || slices.ContainsFunc(p.Require, func(s config.Selector) bool { return s.Kind() == "microsoft_tenant" })
-		cp.include = e.roleMatchers(p.Include, unbound)
-		cp.require = e.roleMatchers(p.Require, unbound)
-		cp.exclude = e.roleMatchers(p.Exclude, true)
+		// An unbound role can only count against a user, unless the policy
+		// pins the tenant. Excluding from a deny policy would work for them.
+		tenant := slices.ContainsFunc(p.Require, func(s config.Selector) bool { return s.Kind() == "microsoft_tenant" })
+		deny := p.Action == config.ActionDeny
+		cp.include = e.roleMatchers(p.Include, deny || tenant)
+		cp.require = e.roleMatchers(p.Require, deny || tenant)
+		cp.exclude = e.roleMatchers(p.Exclude, !deny || tenant)
 		e.policies[name] = cp
 	}
 	return e

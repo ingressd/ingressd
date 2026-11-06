@@ -98,7 +98,21 @@ func (a *Allowlist) save(statePath, source string) error {
 	if a.Networks == nil {
 		a.Networks = []string{}
 	}
-	return writeJSONFile(AllowlistPath(statePath), a)
+	// `allow` may run as root beside a connector that does not: the list
+	// only appears once the connector can read it.
+	path := AllowlistPath(statePath)
+	tmp := path + ".new"
+	err := writeJSONFile(tmp, a)
+	if err == nil {
+		err = matchOwner(tmp, statePath)
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
+	}
+	return err
 }
 
 // privateNetworks are in every default list: origins are added from the panel,
@@ -112,10 +126,24 @@ var privateNetworks = []netip.Prefix{
 
 // pinnedAllowlist is the default list: private networks, plus what the site
 // reaches now. A /0 is left out, since only the operator can allow one; it
-// shows as refused like any other network outside the list. --allow replaces
-// this with a tighter list.
+// shows as refused like any other network outside the list, and the origins
+// the site tests through it are pinned one by one so that they keep working.
+// --allow replaces this with a tighter list.
 func pinnedAllowlist(st *State) *Allowlist {
-	nets := slices.DeleteFunc(st.asked(), func(p netip.Prefix) bool { return p.Bits() == 0 })
+	asked := st.asked()
+	nets := slices.DeleteFunc(slices.Clone(asked), func(p netip.Prefix) bool {
+		return p.Bits() == 0 || p.IsSingleIP() && hostOnly(p.Addr())
+	})
+	for _, t := range st.Targets() {
+		ap, err := netip.ParseAddrPort(t)
+		if err != nil || hostOnly(ap.Addr()) {
+			continue
+		}
+		a := ap.Addr().Unmap()
+		if slices.ContainsFunc(asked, func(p netip.Prefix) bool { return p.Contains(a) }) {
+			nets = append(nets, netip.PrefixFrom(a, a.BitLen()))
+		}
+	}
 	nets = append(nets, privateNetworks...)
 	a := &Allowlist{}
 	for _, p := range outermost(nets) {
@@ -168,6 +196,11 @@ func (r *localReach) narrow(p netip.Prefix) []netip.Prefix {
 		}
 	}
 	return out
+}
+
+// usable reports whether the file gave a whole, non-empty list.
+func (r *localReach) usable() bool {
+	return r != nil && r.problem == "" && len(r.nets) > 0
 }
 
 // report is the problem to show, if any.

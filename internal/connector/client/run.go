@@ -683,18 +683,16 @@ func (s *session) snapshot() Status {
 	}
 	tunnel := s.st.Tunnel()
 	info := siblingInfo(s.st)
-	refused, reach := s.st.refused(), s.st.reach
 	s.mu.Unlock()
 	now := time.Now().UTC()
 	st := Status{
 		Health: proto.Health{Time: now, Mode: s.mode, Version: version.String(), Hostname: s.hostname, MTU: s.link.MTU(), Discovery: s.discover,
-			OS: runtime.GOOS, Arch: runtime.GOARCH, Install: s.upd.install, Update: s.upd.snapshot(),
-			RefusedSubnets: refused, AllowlistError: reach.report()},
-		Tunnel:       tunnel,
-		Started:      s.started,
-		Interface:    s.link.Kind(),
-		LANFilterOff: reach != nil && reach.unfiltered.Load(),
+			OS: runtime.GOOS, Arch: runtime.GOARCH, Install: s.upd.install, Update: s.upd.snapshot()},
+		Tunnel:    tunnel,
+		Started:   s.started,
+		Interface: s.link.Kind(),
 	}
+	s.stateCopy().reportReach(&st.Health)
 	var best *EdgeStatus
 	pollOK := false
 	for _, e := range edges {

@@ -176,9 +176,6 @@ type Status struct {
 	LastPoll  time.Time    `json:"last_poll,omitempty"`
 	PollError string       `json:"poll_error,omitempty"`
 	Edges     []EdgeStatus `json:"edges,omitempty"`
-	// LANFilterOff: TUN mode could not install its filter, so the allowlist
-	// is not being enforced on this host.
-	LANFilterOff bool `json:"lan_filter_off,omitempty"`
 }
 
 // EdgeStatus is the live state of one edge.

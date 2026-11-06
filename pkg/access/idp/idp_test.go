@@ -176,6 +176,8 @@ func TestMicrosoftUnboundRoles(t *testing.T) {
 		"excluded": {Action: config.ActionAllow, Include: everyone, Exclude: role},
 		"denied":   {Action: config.ActionDeny, Include: role},
 		"open":     {Action: config.ActionAllow, Include: everyone},
+		"lockdown": {Action: config.ActionDeny, Include: everyone, Exclude: role},
+		"pinned":   {Action: config.ActionDeny, Include: everyone, Require: tenant, Exclude: role},
 	}})
 	s := fake(t)
 	s.SetUser("microsoft", idptest.User{Sub: "x", OID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", TID: tid, Roles: []string{"Guest"}})
@@ -183,7 +185,7 @@ func TestMicrosoftUnboundRoles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	who := access.UserIdentity(id.Principal(), id.Method, id.Attrs)
+	who := access.UserIdentity(id.Principal(), id.Method, access.KeepAttrs(id.Attrs, eng.ReferencedAttrs()))
 	if !eng.Evaluate([]string{"paired"}, who).Allowed() {
 		t.Error("a role with a required tenant should match")
 	}
@@ -192,6 +194,12 @@ func TestMicrosoftUnboundRoles(t *testing.T) {
 	}
 	if eng.Evaluate([]string{"denied", "open"}, who).Allowed() {
 		t.Error("a deny policy on a role should still deny")
+	}
+	if eng.Evaluate([]string{"lockdown", "open"}, who).Allowed() {
+		t.Error("an exclude on a deny policy needs a required tenant")
+	}
+	if !eng.Evaluate([]string{"pinned", "open"}, who).Allowed() {
+		t.Error("an exclude on a deny policy with a required tenant should match")
 	}
 }
 
