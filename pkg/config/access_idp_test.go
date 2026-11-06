@@ -173,3 +173,41 @@ func TestPasskeyConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestMicrosoftRoleWarnings(t *testing.T) {
+	const tid = "11111111-2222-3333-4444-555555555555"
+	cfg := func(tenant, require string) *Config {
+		c, err := Parse([]byte(`
+version: 1
+edge: { acme: { ca: internal } }
+email: { provider: log, log: { path: /tmp/mail.log } }
+access:
+  portal_host: auth.example.com
+  providers:
+    microsoft: { client_id: "c", client_secret: secret://ms` + tenant + ` }
+policies:
+  admins: { action: allow, include: [{ microsoft_role: [Admin] }]` + require + ` }
+apps:
+  web: { hosts: [web.example.com], origin: "http://192.0.2.10:80", access: [admins], login_methods: [microsoft] }
+`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	warned := func(c *Config) bool {
+		return slices.ContainsFunc(c.AccessWarnings(), func(w string) bool { return strings.Contains(w, "microsoft_role") })
+	}
+	if !warned(cfg("", "")) {
+		t.Error("no warning without a tenant")
+	}
+	if warned(cfg(", tenant: "+tid, "")) {
+		t.Error("warning with a single-tenant provider")
+	}
+	if warned(cfg("", ", require: [{ microsoft_tenant: ["+tid+"] }]")) {
+		t.Error("warning with a required tenant")
+	}
+}

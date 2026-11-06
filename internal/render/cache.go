@@ -56,11 +56,17 @@ func withCacheAndFallback(name string, app config.App, opts Options, hs []obj) [
 }
 
 // cacheSubroute runs the cache in front of proxy unless the request must
-// bypass it (Authorization, session cookies, bypass_paths).
+// bypass it (Authorization, session cookies, a signed-in user or service
+// token, bypass_paths). The cache key holds no identity, so only anonymous
+// requests may share entries. Coalescing stays off because it would hand one
+// request's response to concurrent ones whatever that response allows.
 func cacheSubroute(c *config.Cache, opts Options, proxy obj) obj {
 	bypass := []obj{
 		{"header": obj{"Authorization": []string{}}},
 		{"header_regexp": obj{"Cookie": obj{"pattern": sessionCookieRe}}},
+	}
+	for _, h := range identityHeaders {
+		bypass = append(bypass, obj{"header": obj{h: []string{}}})
 	}
 	if len(c.BypassPaths) > 0 {
 		var paths []string
@@ -86,6 +92,7 @@ func cacheSubroute(c *config.Cache, opts Options, proxy obj) obj {
 		"ttl":                time.Duration(c.DefaultTTL).String(),
 		"stale":              config.MaxStaleIfError.String(),
 		"allowed_http_verbs": []string{"GET", "HEAD"},
+		"disable_coalescing": true,
 		"badger":             badgerStore(opts),
 	}
 	if len(c.Vary) > 0 {

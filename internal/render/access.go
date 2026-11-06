@@ -4,6 +4,7 @@ package render
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/ingressd/ingressd/internal/auth"
 	"github.com/ingressd/ingressd/pkg/config"
@@ -11,15 +12,35 @@ import (
 
 // identityHeaders are set by edge_auth for origins; clients must never be
 // able to supply them, on protected and public apps alike.
-var identityHeaders = []string{"X-Edge-User-Email", "Edge-Jwt-Assertion", "X-Edge-Service-Token"}
+var identityHeaders = []string{"X-Edge-User", "X-Edge-User-Email", "Edge-Jwt-Assertion", "X-Edge-Service-Token", "X-Edge-Session-Id"}
+
+// identityHeaderSpellings lists identityHeaders with every mix of "-" and "_"
+// separators: CGI-style origins read both spellings as the same header.
+func identityHeaderSpellings() []string {
+	var out []string
+	for _, h := range identityHeaders {
+		parts := strings.Split(h, "-")
+		spellings := parts[:1:1]
+		for _, part := range parts[1:] {
+			var next []string
+			for _, s := range spellings {
+				next = append(next, s+"-"+part, s+"_"+part)
+			}
+			spellings = next
+		}
+		out = append(out, spellings...)
+	}
+	return out
+}
 
 // withAccess puts the access handler in front of an app's handlers:
 // edge_auth for protected apps (it also strips spoofed identity headers),
-// and a header scrub for public ones.
+// behind the filters that need no identity, and a header scrub for public
+// ones.
 func withAccess(cfg *config.Config, res Resolver, opts Options, name string, handlers []obj) ([]obj, error) {
 	app := cfg.Apps[name]
 	if !app.Protected() {
-		strip := obj{"handler": "headers", "request": obj{"delete": identityHeaders}}
+		strip := obj{"handler": "headers", "request": obj{"delete": identityHeaderSpellings()}}
 		return append([]obj{strip}, handlers...), nil
 	}
 	ec, err := auth.BuildEdgeConfig(cfg, res, name, opts.ControlSocket)
@@ -36,5 +57,5 @@ func withAccess(cfg *config.Config, res Resolver, opts Options, name string, han
 	if err := json.Unmarshal(b, &h); err != nil {
 		return nil, err
 	}
-	return append([]obj{h}, handlers...), nil
+	return append(append(preAuthFilters(cfg, name, app, opts), h), handlers...), nil
 }

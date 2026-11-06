@@ -11,10 +11,39 @@
     "http": {
       "servers": {
         "edge": {
+          "allow_0rtt": false,
           "listen": [
             ":443"
           ],
           "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "headers",
+                  "request": {
+                    "delete": [
+                      "Upgrade"
+                    ]
+                  }
+                }
+              ],
+              "match": [
+                {
+                  "header": {
+                    "Upgrade": []
+                  },
+                  "not": [
+                    {
+                      "vars_regexp": {
+                        "{http.request.header.Upgrade}": {
+                          "pattern": "(?i)^\\s*(websocket|spdy/3\\.1|tcp)\\s*$"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
             {
               "handle": [
                 {
@@ -26,9 +55,38 @@
                           "handler": "headers",
                           "request": {
                             "delete": [
+                              "X-Edge-User",
+                              "X-Edge_User",
+                              "X_Edge-User",
+                              "X_Edge_User",
                               "X-Edge-User-Email",
+                              "X-Edge-User_Email",
+                              "X-Edge_User-Email",
+                              "X-Edge_User_Email",
+                              "X_Edge-User-Email",
+                              "X_Edge-User_Email",
+                              "X_Edge_User-Email",
+                              "X_Edge_User_Email",
                               "Edge-Jwt-Assertion",
-                              "X-Edge-Service-Token"
+                              "Edge-Jwt_Assertion",
+                              "Edge_Jwt-Assertion",
+                              "Edge_Jwt_Assertion",
+                              "X-Edge-Service-Token",
+                              "X-Edge-Service_Token",
+                              "X-Edge_Service-Token",
+                              "X-Edge_Service_Token",
+                              "X_Edge-Service-Token",
+                              "X_Edge-Service_Token",
+                              "X_Edge_Service-Token",
+                              "X_Edge_Service_Token",
+                              "X-Edge-Session-Id",
+                              "X-Edge-Session_Id",
+                              "X-Edge_Session-Id",
+                              "X-Edge_Session_Id",
+                              "X_Edge-Session-Id",
+                              "X_Edge-Session_Id",
+                              "X_Edge_Session-Id",
+                              "X_Edge_Session_Id"
                             ]
                           }
                         },
@@ -104,7 +162,7 @@
                           }
                         },
                         {
-                          "directives": "Include @coraza.conf-recommended\nInclude @crs-setup.conf.example\nSecRuleEngine DetectionOnly\nSecResponseBodyAccess On\nSecAuditEngine RelevantOnly\nSecAuditLogRelevantStatus \"^40[03]$\"\nSecAuditLogParts ABFHKZ\nSecAuditLogFormat JSON\nSecAuditLogType Serial\nSecAuditLogFileMode 0640\nSecAuditLog /var/lib/ingressd/waf/audit.log\nSecAction \"id:900000,phase:1,pass,t:none,nolog,setvar:tx.blocking_paranoia_level=1\"\nSecAction \"id:900110,phase:1,pass,t:none,nolog,setvar:tx.inbound_anomaly_score_threshold=5,setvar:tx.outbound_anomaly_score_threshold=4\"\nInclude @owasp_crs/*.conf\n",
+                          "directives": "Include @coraza.conf-recommended\nInclude @crs-setup.conf.example\nSecRuleEngine DetectionOnly\nSecResponseBodyAccess On\nSecAuditEngine RelevantOnly\nSecAuditLogRelevantStatus \"^40[03]$\"\nSecAuditLogParts AFHKZ\nSecAuditLogFormat JSON\nSecAuditLogType Serial\nSecAuditLogFileMode 0640\nSecAuditLog /var/lib/ingressd/waf/audit.log\nSecAction \"id:900000,phase:1,pass,t:none,nolog,setvar:tx.blocking_paranoia_level=1\"\nSecAction \"id:900110,phase:1,pass,t:none,nolog,setvar:tx.inbound_anomaly_score_threshold=5,setvar:tx.outbound_anomaly_score_threshold=4\"\nInclude @owasp_crs/*.conf\n",
                           "handler": "waf",
                           "load_owasp_crs": true
                         },
@@ -150,9 +208,38 @@
                           "handler": "headers",
                           "request": {
                             "delete": [
+                              "X-Edge-User",
+                              "X-Edge_User",
+                              "X_Edge-User",
+                              "X_Edge_User",
                               "X-Edge-User-Email",
+                              "X-Edge-User_Email",
+                              "X-Edge_User-Email",
+                              "X-Edge_User_Email",
+                              "X_Edge-User-Email",
+                              "X_Edge-User_Email",
+                              "X_Edge_User-Email",
+                              "X_Edge_User_Email",
                               "Edge-Jwt-Assertion",
-                              "X-Edge-Service-Token"
+                              "Edge-Jwt_Assertion",
+                              "Edge_Jwt-Assertion",
+                              "Edge_Jwt_Assertion",
+                              "X-Edge-Service-Token",
+                              "X-Edge-Service_Token",
+                              "X-Edge_Service-Token",
+                              "X-Edge_Service_Token",
+                              "X_Edge-Service-Token",
+                              "X_Edge-Service_Token",
+                              "X_Edge_Service-Token",
+                              "X_Edge_Service_Token",
+                              "X-Edge-Session-Id",
+                              "X-Edge-Session_Id",
+                              "X-Edge_Session-Id",
+                              "X-Edge_Session_Id",
+                              "X_Edge-Session-Id",
+                              "X_Edge-Session_Id",
+                              "X_Edge_Session-Id",
+                              "X_Edge_Session_Id"
                             ]
                           }
                         },
@@ -252,10 +339,13 @@
                           "handler": "crowdsec"
                         },
                         {
+                          "handler": "edge_client_net"
+                        },
+                        {
                           "handler": "rate_limit",
                           "rate_limits": {
                             "web_0": {
-                              "key": "{http.vars.client_ip}",
+                              "key": "{http.vars.client_net}",
                               "match": [
                                 {
                                   "path": [
@@ -300,7 +390,7 @@
                           "ttl": "24h0m0s"
                         },
                         {
-                          "directives": "Include @coraza.conf-recommended\nInclude @crs-setup.conf.example\nSecRuleEngine On\nSecResponseBodyAccess Off\nSecAuditEngine RelevantOnly\nSecAuditLogRelevantStatus \"^40[03]$\"\nSecAuditLogParts ABFHKZ\nSecAuditLogFormat JSON\nSecAuditLogType Serial\nSecAuditLogFileMode 0640\nSecAuditLog /var/lib/ingressd/waf/audit.log\nSecAction \"id:900000,phase:1,pass,t:none,nolog,setvar:tx.blocking_paranoia_level=2\"\nSecAction \"id:900110,phase:1,pass,t:none,nolog,setvar:tx.inbound_anomaly_score_threshold=5,setvar:tx.outbound_anomaly_score_threshold=4\"\nSecRule REQUEST_FILENAME \"@beginsWith /api/search\" \"id:10000,phase:1,pass,t:none,nolog,ctl:ruleRemoveTargetById=942100;ARGS:q\"\nSecRule REQUEST_FILENAME \"@beginsWith /cms/\" \"id:10001,phase:1,pass,t:none,nolog,ctl:ruleRemoveByTag=attack-xss\"\nSecAction \"id:10002,phase:1,pass,t:none,nolog,ctl:ruleRemoveById=920350\"\nInclude @owasp_crs/*.conf\n",
+                          "directives": "Include @coraza.conf-recommended\nInclude @crs-setup.conf.example\nSecRuleEngine On\nSecResponseBodyAccess Off\nSecAuditEngine RelevantOnly\nSecAuditLogRelevantStatus \"^40[03]$\"\nSecAuditLogParts AFHKZ\nSecAuditLogFormat JSON\nSecAuditLogType Serial\nSecAuditLogFileMode 0640\nSecAuditLog /var/lib/ingressd/waf/audit.log\nSecAction \"id:900000,phase:1,pass,t:none,nolog,setvar:tx.blocking_paranoia_level=2\"\nSecAction \"id:900110,phase:1,pass,t:none,nolog,setvar:tx.inbound_anomaly_score_threshold=5,setvar:tx.outbound_anomaly_score_threshold=4\"\nSecRule REQUEST_FILENAME \"@beginsWith /api/search\" \"id:10000,phase:1,pass,t:none,nolog,ctl:ruleRemoveTargetById=942100;ARGS:q\"\nSecRule REQUEST_FILENAME \"@beginsWith /cms/\" \"id:10001,phase:1,pass,t:none,nolog,ctl:ruleRemoveByTag=attack-xss\"\nSecAction \"id:10002,phase:1,pass,t:none,nolog,ctl:ruleRemoveById=920350\"\nInclude @owasp_crs/*.conf\n",
                           "handler": "waf",
                           "load_owasp_crs": true
                         },

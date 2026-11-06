@@ -129,3 +129,21 @@ func TestExtraInputTCP(t *testing.T) {
 		t.Errorf("extra ports not opened once:\n%s", got)
 	}
 }
+
+func TestL4ListenerFamily(t *testing.T) {
+	cfg := &config.Config{L4: map[string]config.L4Service{
+		"open":   {ProxyProtocol: "v2", Target: config.L4Target{Tunnel: "t", Address: "10.0.0.1"}, Listen: []string{"25565/tcp"}},
+		"closed": {ProxyProtocol: "v2", Target: config.L4Target{Tunnel: "t", Address: "10.0.0.1"}, Listen: []string{"25566/tcp"}, Access: config.L4AccessAllowlist},
+		"login":  {ProxyProtocol: "v2", Target: config.L4Target{Tunnel: "t", Address: "10.0.0.1"}, Listen: []string{"25567/tcp"}, Access: config.L4AccessLoginToPlay},
+	}}
+	servers := l4CaddyApp(cfg)["servers"].(obj)
+	for name, want := range map[string]string{
+		"l4_open_25565":   "tcp/:25565",
+		"l4_closed_25566": "tcp4/:25566",
+		"l4_login_25567":  "tcp4/:25567",
+	} {
+		if got := servers[name].(obj)["listen"].([]string)[0]; got != want {
+			t.Errorf("%s listens on %s, want %s", name, got, want)
+		}
+	}
+}

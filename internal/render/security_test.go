@@ -81,7 +81,9 @@ func handlerNames(t *testing.T, caddyJSON, host string) []string {
 			HTTP struct {
 				Servers map[string]struct {
 					Routes []struct {
-						Match  []map[string][]string `json:"match"`
+						Match []struct {
+							Host []string `json:"host"`
+						} `json:"match"`
 						Handle []struct {
 							Routes []struct {
 								Handle []map[string]any `json:"handle"`
@@ -96,7 +98,7 @@ func handlerNames(t *testing.T, caddyJSON, host string) []string {
 		t.Fatal(err)
 	}
 	for _, r := range root.Apps.HTTP.Servers["edge"].Routes {
-		if len(r.Match) == 1 && len(r.Match[0]["host"]) > 0 && r.Match[0]["host"][0] == host {
+		if len(r.Match) == 1 && len(r.Match[0].Host) > 0 && r.Match[0].Host[0] == host {
 			var names []string
 			for _, h := range r.Handle[0].Routes[0].Handle {
 				names = append(names, h["handler"].(string))
@@ -112,7 +114,7 @@ func TestSecurityOrder(t *testing.T) {
 	s := renderSecurity(t, SecurityOptions{}, nil)
 	got := strings.Join(handlerNames(t, s, "web.example.com"), ",")
 	// Public apps first strip spoofable identity headers (access), then security.
-	if want := "headers,subroute,crowdsec,rate_limit,edge_challenge,waf,reverse_proxy"; got != want {
+	if want := "headers,subroute,crowdsec,edge_client_net,rate_limit,edge_challenge,waf,reverse_proxy"; got != want {
 		t.Errorf("handler order = %s, want %s", got, want)
 	}
 	for _, want := range []string{
@@ -147,5 +149,84 @@ func TestUnderAttack(t *testing.T) {
 	}
 	if !strings.Contains(s, `"mode": "under_attack"`) || !strings.Contains(s, `"difficulty": 20`) {
 		t.Error("under-attack challenge not rendered with raised difficulty")
+	}
+}
+
+func TestProtectedAppFilterOrder(t *testing.T) {
+	const cfg = `
+version: 1
+edge: { acme: { ca: internal }, crowdsec: { enabled: true, api_key: secret://cs } }
+email: { provider: log, log: { path: /var/lib/ingressd/mail.log } }
+access: { portal_host: auth.example.com }
+policies:
+  staff: { action: allow, include: [{ email_domain: example.com }] }
+apps:
+  web:
+    hosts: [web.example.com]
+    origin: http://192.0.2.10:8080
+    access: [staff]
+    security: { ip_deny: [203.0.113.0/24] }
+    rate_limit:
+      - { match: /login, requests: 10, per: 1m }
+      - { match: /api/*, requests: 100, per: 1m, key: email }
+      - { match: /files/*, requests: 100, per: 1m, key: "header:X-Api-Key" }
+`
+	c, err := config.Parse([]byte(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	st := map[string]string{"cs": "CS-KEY"}
+	for k, v := range accessSecrets {
+		st[k] = v
+	}
+	p, err := Render(c, secrets.NewMemory(st), fakeKeys{}, Options{AdminListen: "unix//run/ingressd/caddy-admin.sock"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(p.Caddy)
+	got := strings.Join(handlerNames(t, s, "web.example.com"), ",")
+	if want := "subroute,crowdsec,edge_client_net,rate_limit,edge_auth,rate_limit,reverse_proxy"; got != want {
+		t.Errorf("handler order = %s, want %s", got, want)
+	}
+	auth := strings.Index(s, `"handler": "edge_auth"`)
+	for _, after := range []string{`"web_1"`, `"web_2"`} {
+		if i := strings.Index(s, after); i < auth {
+			t.Errorf("zone %s comes before edge_auth", after)
+		}
+	}
+	if i := strings.Index(s, `"web_0"`); i < 0 || i > auth {
+		t.Error("address zone does not come before edge_auth")
+	}
+}
+
+func TestRateLimitRequestsClamped(t *testing.T) {
+	s := renderSecurity(t, SecurityOptions{}, func(c *config.Config) {
+		a := c.Apps["web"]
+		a.RateLimit[0].Requests = 2_000_000_000
+		c.Apps["web"] = a
+	})
+	if strings.Contains(s, "2000000000") || !strings.Contains(s, `"max_events": 100000`) {
+		t.Error("rate limit size was not clamped")
+	}
+}
+
+func TestRateLimitKeysUseClientNet(t *testing.T) {
+	for k, want := range map[string]string{
+		"ip":      "{http.vars.client_net}",
+		"ip_path": "{http.vars.client_net} {http.request.uri.path}",
+	} {
+		if got := rateLimitKey(k); got != want {
+			t.Errorf("rateLimitKey(%q) = %q, want %q", k, got, want)
+		}
+	}
+}
+
+func TestWAFAuditLogParts(t *testing.T) {
+	d := wafDirectives(&config.WAF{Mode: config.WAFBlock, Paranoia: 1}, "/tmp/audit.log")
+	if !strings.Contains(d, "SecAuditLogParts AFHKZ\n") {
+		t.Errorf("audit log parts: %s", d)
 	}
 }

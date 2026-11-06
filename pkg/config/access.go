@@ -282,7 +282,8 @@ func (c *Config) AccessWarnings() []string {
 			"(/admin/* does not cover /admin); give the app an access list and open public paths with bypass rules instead",
 			name, strings.Join(protected, ", "), map[bool]string{true: "is", false: "are"}[len(protected) == 1]))
 	}
-	return append(out, c.loginMethodWarnings()...)
+	out = append(out, c.loginMethodWarnings()...)
+	return append(out, c.microsoftRoleWarnings()...)
 }
 
 // StringList accepts either a single string or a list of strings.
@@ -510,7 +511,7 @@ func (c *Config) validateAccess(v *validator) {
 // path p).
 func (c *Config) validateAccessBlock(v *validator, p string, a *Access) {
 	if a.PortalHost != "" {
-		if !validHostname(a.PortalHost, false) {
+		if !servableHostname(a.PortalHost, false) {
 			v.add(p+".portal_host", "invalid hostname %q", a.PortalHost)
 		}
 		if a.PortalHost == c.Edge.Admin.Hostname {

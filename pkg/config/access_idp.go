@@ -418,6 +418,28 @@ func (c *Config) loginMethodWarnings() []string {
 	return out
 }
 
+// microsoftRoleWarnings advises tying role policies to a tenant: unless the
+// provider is limited to one tenant, a role value alone does not say which
+// directory assigned it.
+func (c *Config) microsoftRoleWarnings() []string {
+	if a := c.Access; a != nil && guidRe.MatchString(a.Providers[MethodMicrosoft].Tenant) {
+		return nil
+	}
+	kind := func(k string) func(Selector) bool {
+		return func(s Selector) bool { return s.Kind() == k }
+	}
+	var out []string
+	for _, name := range sortedKeys(c.Policies) {
+		p := c.Policies[name]
+		uses := slices.ContainsFunc(p.Include, kind("microsoft_role")) || slices.ContainsFunc(p.Require, kind("microsoft_role"))
+		if uses && !slices.ContainsFunc(p.Require, kind("microsoft_tenant")) {
+			out = append(out, fmt.Sprintf("policies.%s: microsoft_role is not tied to a tenant; add a microsoft_tenant selector under require, "+
+				"or set access.providers.microsoft.tenant to your tenant ID", name))
+		}
+	}
+	return out
+}
+
 func appLists(a App) [][]string {
 	lists := [][]string{a.Access}
 	for _, r := range a.Paths {

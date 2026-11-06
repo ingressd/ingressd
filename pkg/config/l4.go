@@ -298,7 +298,7 @@ func (c *Config) validateL4(v *validator) {
 				// Played through the external portal (access.portal_url).
 			case h == "":
 				v.add(p+".login_to_play.portal_host", "is required (or set access.portal_url)")
-			case !validHostname(h, false):
+			case !servableHostname(h, false):
 				v.add(p+".login_to_play.portal_host", "invalid hostname %q", h)
 			case hosts[h]:
 				v.add(p+".login_to_play.portal_host", "%q is already served by an app", h)

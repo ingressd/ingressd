@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"golang.org/x/net/idna"
 )
 
 var (
@@ -90,7 +92,7 @@ func (c *Config) validateEdge(v *validator) {
 			v.add("edge.public_ipv6", "invalid IPv6 address %q", s)
 		}
 	}
-	if h := c.Edge.Admin.Hostname; h != "" && !validHostname(h, false) {
+	if h := c.Edge.Admin.Hostname; h != "" && !servableHostname(h, false) {
 		v.add("edge.admin.hostname", "invalid hostname %q", h)
 	}
 	switch c.Edge.Admin.Exposure {
@@ -415,7 +417,7 @@ func (c *Config) validateApps(v *validator) {
 		}
 		for i, h := range a.Hosts {
 			hp := fmt.Sprintf("%s.hosts[%d]", p, i)
-			if !validHostname(h, true) {
+			if !servableHostname(h, true) {
 				v.add(hp, "invalid hostname %q", h)
 				continue
 			}
@@ -546,6 +548,17 @@ func validHostname(h string, allowWildcard bool) bool {
 		}
 	}
 	return true
+}
+
+// servableHostname is validHostname for names the edge serves. Caddy converts
+// every host it matches with idna.ToASCII and refuses the whole config if that
+// fails, which the label syntax alone does not rule out (bad xn-- labels).
+func servableHostname(h string, allowWildcard bool) bool {
+	if !validHostname(h, allowWildcard) {
+		return false
+	}
+	_, err := idna.ToASCII(h)
+	return err == nil
 }
 
 func firstOverlap(a, b []string) (string, string, bool) {

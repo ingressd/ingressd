@@ -6,6 +6,7 @@
     "http": {
       "servers": {
         "edge": {
+          "allow_0rtt": false,
           "listen": [
             ":443"
           ],
@@ -34,6 +35,34 @@
             {
               "handle": [
                 {
+                  "handler": "headers",
+                  "request": {
+                    "delete": [
+                      "Upgrade"
+                    ]
+                  }
+                }
+              ],
+              "match": [
+                {
+                  "header": {
+                    "Upgrade": []
+                  },
+                  "not": [
+                    {
+                      "vars_regexp": {
+                        "{http.request.header.Upgrade}": {
+                          "pattern": "(?i)^\\s*(websocket|spdy/3\\.1|tcp)\\s*$"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "handle": [
+                {
                   "handler": "subroute",
                   "routes": [
                     {
@@ -42,9 +71,38 @@
                           "handler": "headers",
                           "request": {
                             "delete": [
+                              "X-Edge-User",
+                              "X-Edge_User",
+                              "X_Edge-User",
+                              "X_Edge_User",
                               "X-Edge-User-Email",
+                              "X-Edge-User_Email",
+                              "X-Edge_User-Email",
+                              "X-Edge_User_Email",
+                              "X_Edge-User-Email",
+                              "X_Edge-User_Email",
+                              "X_Edge_User-Email",
+                              "X_Edge_User_Email",
                               "Edge-Jwt-Assertion",
-                              "X-Edge-Service-Token"
+                              "Edge-Jwt_Assertion",
+                              "Edge_Jwt-Assertion",
+                              "Edge_Jwt_Assertion",
+                              "X-Edge-Service-Token",
+                              "X-Edge-Service_Token",
+                              "X-Edge_Service-Token",
+                              "X-Edge_Service_Token",
+                              "X_Edge-Service-Token",
+                              "X_Edge-Service_Token",
+                              "X_Edge_Service-Token",
+                              "X_Edge_Service_Token",
+                              "X-Edge-Session-Id",
+                              "X-Edge-Session_Id",
+                              "X-Edge_Session-Id",
+                              "X-Edge_Session_Id",
+                              "X_Edge-Session-Id",
+                              "X_Edge-Session_Id",
+                              "X_Edge_Session-Id",
+                              "X_Edge_Session_Id"
                             ]
                           }
                         },

@@ -96,6 +96,10 @@ func newFixture(t *testing.T) *fixture {
 			http.Error(w, "not allowed: dave@example.com may not access this app", http.StatusForbidden)
 			return
 		}
+		rd := "/after?x=1"
+		if req.Code == "good-slashes" {
+			req.Code, rd = "good", "//other.example/x"
+		}
 		if req.Code != "good" || req.App != "web" || r.Host != "access.ingressd.internal" {
 			http.Error(w, "invalid code", http.StatusForbidden)
 			return
@@ -104,7 +108,7 @@ func newFixture(t *testing.T) *fixture {
 		json.NewEncoder(w).Encode(exchangeResponse{
 			Token:   f.seal(t, "sid-cb", "carol@example.com", map[string]string{"members": "v1"}, exp),
 			Expires: exp.Unix(),
-			RD:      "https://" + req.Host + "/after?x=1",
+			RD:      "https://" + req.Host + rd,
 		})
 	})
 	mux.HandleFunc("GET /v1/revocations", func(w http.ResponseWriter, r *http.Request) {
@@ -460,6 +464,13 @@ func TestEdgeAuth(t *testing.T) {
 	t.Run("network deny policy", func(t *testing.T) {
 		if resp, _ := c.get("/blocked/x", nil); resp.StatusCode != http.StatusForbidden {
 			t.Fatalf("status %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("callback redirect stays on the host", func(t *testing.T) {
+		resp, _ := c.get("/.ingressd/callback?code=good-slashes", nil)
+		if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/other.example/x" {
+			t.Fatalf("status %d location %q", resp.StatusCode, resp.Header.Get("Location"))
 		}
 	})
 
