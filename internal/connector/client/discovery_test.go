@@ -313,3 +313,12 @@ func TestEnrollAlternateEdgeToken(t *testing.T) {
 		t.Errorf("enrol with the top-level token: err = %v, want bad token", err)
 	}
 }
+
+// A /22 is the largest subnet scanned per interface.
+func TestDefaultPortsFitScan(t *testing.T) {
+	hosts := 1 << (32 - MaxDiscoveryPrefix)
+	need := time.Duration(hosts*len(DefaultDiscoveryPorts)/defaultProbeRate) * time.Second
+	if need > defaultScanTimeout*3/4 {
+		t.Fatalf("%d ports need %s on a /22, too close to the %s scan timeout", len(DefaultDiscoveryPorts), need, defaultScanTimeout)
+	}
+}

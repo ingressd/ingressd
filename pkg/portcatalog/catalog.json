@@ -1,0 +1,160 @@
+[
+  { "port": 22, "proto": "tcp", "probe": "tcp", "lan_scan": false, "risk": "high", "apps": [
+    { "name": "OpenSSH Server", "preset": "ssh", "category": "infrastructure" },
+    { "name": "GitLab Shell (SSH)", "preset": "gitlab_ssh", "category": "development" } ] },
+  { "port": 53, "proto": "udp", "probe": "dns", "lan_scan": true, "risk": "medium", "apps": [
+    { "name": "Pi-hole / AdGuard Home", "preset": "pihole_dns", "category": "network" } ] },
+  { "port": 80, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "medium", "apps": [
+    { "name": "HTTP Web Server", "preset": "http", "category": "infrastructure" },
+    { "name": "GitLab Web (HTTP)", "preset": "gitlab_http", "category": "development" } ] },
+  { "port": 81, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "high", "apps": [
+    { "name": "Nginx Proxy Manager", "preset": "nginx_proxy_manager", "category": "infrastructure" } ] },
+  { "port": 443, "proto": "tcp", "probe": "tls", "lan_scan": true, "risk": "medium", "apps": [
+    { "name": "Nextcloud / HTTPS Proxy", "preset": "nextcloud", "category": "storage" },
+    { "name": "GitLab Web (HTTPS)", "preset": "gitlab_https", "category": "development" } ] },
+  { "port": 2283, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "normal", "apps": [
+    { "name": "Immich", "preset": "immich", "category": "media" } ] },
+  { "port": 2342, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "normal", "apps": [
+    { "name": "PhotoPrism", "preset": "photoprism", "category": "media" } ] },
+  { "port": 2456, "proto": "udp", "probe": "udp", "lan_scan": false, "risk": "normal", "apps": [
+    { "name": "Valheim", "preset": "valheim", "category": "game" } ] },
+  { "port": 3000, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "normal", "apps": [
+    { "name": "Grafana", "preset": "grafana", "category": "monitoring" },
+    { "name": "Grafana Enterprise", "preset": "grafana_ent", "category": "monitoring" },
+    { "name": "Gitea / Forgejo", "preset": "gitea", "category": "development" } ] },
+  { "port": 3001, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "normal", "apps": [
+    { "name": "Uptime Kuma", "preset": "uptime_kuma", "category": "monitoring" } ] },
+  { "port": 3010, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "high", "apps": [
+    { "name": "Vaultwarden", "preset": "vaultwarden", "category": "security" } ] },
+  { "port": 3100, "proto": "tcp", "probe": "http", "lan_scan": false, "risk": "normal", "apps": [
+    { "name": "Grafana Loki", "preset": "loki", "category": "monitoring" } ] },
+  { "port": 3306, "proto": "tcp", "probe": "tcp", "lan_scan": false, "risk": "high", "apps": [
+    { "name": "MySQL / MariaDB", "preset": "mysql", "category": "database" } ] },
+  { "port": 4200, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "medium", "apps": [
+    { "name": "Angular Dev Server", "preset": "angular", "category": "development" } ] },
+  { "port": 4443, "proto": "tcp", "probe": "tls", "lan_scan": true, "risk": "medium", "apps": [
+    { "name": "GoToSocial / Custom SSL App", "preset": "gotosocial", "category": "infrastructure" } ] },
+  { "port": 4533, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "normal", "apps": [
+    { "name": "Navidrome", "preset": "navidrome", "category": "media" } ] },
+  { "port": 5000, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "medium", "apps": [
+    { "name": "Synology DSM / Flask App", "preset": "synology", "category": "infrastructure" } ] },
+  { "port": 5001, "proto": "tcp", "probe": "tls", "lan_scan": true, "risk": "medium", "apps": [
+    { "name": "Synology DSM HTTPS", "preset": "synology_ssl", "category": "infrastructure" } ] },
+  { "port": 5050, "proto": "tcp", "probe": "http", "lan_scan": false, "risk": "normal", "apps": [
+    { "name": "GitLab Container Registry", "preset": "gitlab_registry", "category": "development" } ] },
+  { "port": 5055, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "normal", "apps": [
+    { "name": "Jellyseerr / Overseerr", "preset": "jellyseerr", "category": "media" } ] },
+  { "port": 5230, "proto": "tcp", "probe": "http", "lan_scan": false, "risk": "normal", "apps": [
+    { "name": "Memos", "preset": "memos", "category": "productivity" } ] },
+  { "port": 5432, "proto": "tcp", "probe": "tcp", "lan_scan": false, "risk": "high", "apps": [
+    { "name": "PostgreSQL", "preset": "postgres", "category": "database" } ] },
+  { "port": 5601, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "medium", "apps": [
+    { "name": "Kibana", "preset": "kibana", "category": "monitoring" },
+    { "name": "Kibana Enterprise", "preset": "kibana_ent", "category": "monitoring" } ] },
+  { "port": 5678, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "medium", "apps": [
+    { "name": "n8n Workflow Automation", "preset": "n8n", "category": "automation" } ] },
+  { "port": 6379, "proto": "tcp", "probe": "tcp", "lan_scan": false, "risk": "high", "apps": [
+    { "name": "Redis", "preset": "redis", "category": "database" } ] },
+  { "port": 6767, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "normal", "apps": [
+    { "name": "Bazarr", "preset": "bazarr", "category": "media" } ] },
+  { "port": 6875, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "normal", "apps": [
+    { "name": "BookStack", "preset": "bookstack", "category": "productivity" } ] },
+  { "port": 7777, "proto": "tcp", "probe": "tcp", "lan_scan": false, "risk": "normal", "apps": [
+    { "name": "The Forest / Sons of the Forest", "preset": "sons_of_the_forest", "category": "game" } ] },
+  { "port": 7777, "proto": "udp", "probe": "udp", "lan_scan": false, "risk": "normal", "apps": [
+    { "name": "Unreal Engine Game Server (ARK/Palworld)", "preset": "ue_games", "category": "game" },
+    { "name": "ARK: Survival Evolved / Ascended", "preset": "ark", "category": "game" } ] },
+  { "port": 7878, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "normal", "apps": [
+    { "name": "Radarr", "preset": "radarr", "category": "media" } ] },
+  { "port": 8000, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "medium", "apps": [
+    { "name": "Django / Python Dev Server", "preset": "django", "category": "development" },
+    { "name": "ERPNext / Frappe", "preset": "erpnext", "category": "business" },
+    { "name": "Paperless-ngx", "preset": "paperless", "category": "productivity" } ] },
+  { "port": 8006, "proto": "tcp", "probe": "tls", "lan_scan": true, "risk": "high", "apps": [
+    { "name": "Proxmox VE", "preset": "proxmox", "category": "infrastructure" } ] },
+  { "port": 8069, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "medium", "apps": [
+    { "name": "Odoo ERP", "preset": "odoo", "category": "business" } ] },
+  { "port": 8080, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "high", "apps": [
+    { "name": "Generic Web UI / Tomcat", "preset": "http_alt", "category": "infrastructure" },
+    { "name": "Keycloak Identity Provider", "preset": "keycloak", "category": "security" },
+    { "name": "Atlassian Jira", "preset": "jira", "category": "business" } ] },
+  { "port": 8081, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "normal", "apps": [
+    { "name": "SABnzbd / Proxy Alt", "preset": "sabnzbd", "category": "download" } ] },
+  { "port": 8086, "proto": "tcp", "probe": "http", "lan_scan": false, "risk": "high", "apps": [
+    { "name": "InfluxDB", "preset": "influxdb", "category": "database" } ] },
+  { "port": 8090, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "medium", "apps": [
+    { "name": "Atlassian Confluence", "preset": "confluence", "category": "business" } ] },
+  { "port": 8096, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "normal", "apps": [
+    { "name": "Jellyfin", "preset": "jellyfin", "category": "media" } ] },
+  { "port": 8123, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "medium", "apps": [
+    { "name": "Home Assistant", "preset": "homeassistant", "category": "automation" } ] },
+  { "port": 8181, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "normal", "apps": [
+    { "name": "Tautulli", "preset": "tautulli", "category": "media" } ] },
+  { "port": 8211, "proto": "udp", "probe": "udp", "lan_scan": false, "risk": "normal", "apps": [
+    { "name": "Palworld", "preset": "palworld", "category": "game" } ] },
+  { "port": 8303, "proto": "udp", "probe": "udp", "lan_scan": false, "risk": "normal", "apps": [
+    { "name": "Teeworlds", "preset": "teeworlds", "category": "game" } ] },
+  { "port": 8384, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "normal", "apps": [
+    { "name": "Syncthing", "preset": "syncthing", "category": "storage" } ] },
+  { "port": 8443, "proto": "tcp", "probe": "tls", "lan_scan": true, "risk": "high", "apps": [
+    { "name": "HTTPS Alt / Unifi Controller", "preset": "unifi", "category": "infrastructure" },
+    { "name": "Keycloak HTTPS", "preset": "keycloak_ssl", "category": "security" } ] },
+  { "port": 8686, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "normal", "apps": [
+    { "name": "Lidarr", "preset": "lidarr", "category": "media" } ] },
+  { "port": 8787, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "medium", "apps": [
+    { "name": "RStudio Server", "preset": "rstudio", "category": "development" } ] },
+  { "port": 8888, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "medium", "apps": [
+    { "name": "Jupyter / Nomad Alt", "preset": "jupyter", "category": "development" } ] },
+  { "port": 8989, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "normal", "apps": [
+    { "name": "Sonarr", "preset": "sonarr", "category": "media" } ] },
+  { "port": 9000, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "high", "apps": [
+    { "name": "Portainer", "preset": "portainer", "category": "infrastructure" },
+    { "name": "Keycloak Management & Health", "preset": "keycloak_mgmt", "category": "security" },
+    { "name": "SonarQube", "preset": "sonarqube", "category": "development" } ] },
+  { "port": 9001, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "high", "apps": [
+    { "name": "Supervisord / Portainer Agent", "preset": "portainer_agent", "category": "infrastructure" },
+    { "name": "MinIO Console", "preset": "minio", "category": "storage" } ] },
+  { "port": 9090, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "medium", "apps": [
+    { "name": "Prometheus", "preset": "prometheus", "category": "monitoring" },
+    { "name": "Cockpit", "preset": "cockpit", "category": "infrastructure" } ] },
+  { "port": 9091, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "medium", "apps": [
+    { "name": "Transmission Web UI", "preset": "transmission", "category": "download" } ] },
+  { "port": 9200, "proto": "tcp", "probe": "http", "lan_scan": false, "risk": "high", "apps": [
+    { "name": "Elasticsearch", "preset": "elasticsearch", "category": "database" } ] },
+  { "port": 9443, "proto": "tcp", "probe": "tls", "lan_scan": true, "risk": "high", "apps": [
+    { "name": "Portainer HTTPS", "preset": "portainer_ssl", "category": "infrastructure" } ] },
+  { "port": 9696, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "normal", "apps": [
+    { "name": "Prowlarr", "preset": "prowlarr", "category": "media" } ] },
+  { "port": 9925, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "normal", "apps": [
+    { "name": "Mealie", "preset": "mealie", "category": "productivity" } ] },
+  { "port": 9987, "proto": "udp", "probe": "udp", "lan_scan": false, "risk": "normal", "apps": [
+    { "name": "TeamSpeak 3 Server", "preset": "teamspeak3", "category": "game" } ] },
+  { "port": 13378, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "normal", "apps": [
+    { "name": "Audiobookshelf", "preset": "audiobookshelf", "category": "media" } ] },
+  { "port": 16261, "proto": "udp", "probe": "udp", "lan_scan": false, "risk": "normal", "apps": [
+    { "name": "Project Zomboid", "preset": "project_zomboid", "category": "game" } ] },
+  { "port": 19132, "proto": "udp", "probe": "udp", "lan_scan": false, "risk": "normal", "apps": [
+    { "name": "Minecraft Bedrock", "preset": "minecraft_bedrock", "category": "game" } ] },
+  { "port": 25565, "proto": "tcp", "probe": "tcp", "lan_scan": false, "risk": "normal", "apps": [
+    { "name": "Minecraft Java", "preset": "minecraft_java", "category": "game" } ] },
+  { "port": 25575, "proto": "tcp", "probe": "tcp", "lan_scan": false, "risk": "high", "apps": [
+    { "name": "Minecraft RCON", "preset": "minecraft_rcon", "category": "game" } ] },
+  { "port": 26900, "proto": "tcp", "probe": "tcp", "lan_scan": false, "risk": "normal", "apps": [
+    { "name": "7 Days to Die", "preset": "7days_to_die", "category": "game" } ] },
+  { "port": 27015, "proto": "udp", "probe": "udp", "lan_scan": false, "risk": "normal", "apps": [
+    { "name": "Source Dedicated Server (CS:GO/GMod)", "preset": "srcds", "category": "game" } ] },
+  { "port": 27016, "proto": "udp", "probe": "udp", "lan_scan": false, "risk": "normal", "apps": [
+    { "name": "Conan Exiles", "preset": "conan_exiles", "category": "game" } ] },
+  { "port": 27017, "proto": "tcp", "probe": "tcp", "lan_scan": false, "risk": "high", "apps": [
+    { "name": "MongoDB", "preset": "mongodb", "category": "database" } ] },
+  { "port": 28015, "proto": "udp", "probe": "udp", "lan_scan": false, "risk": "normal", "apps": [
+    { "name": "Rust", "preset": "rust", "category": "game" } ] },
+  { "port": 30120, "proto": "tcp", "probe": "tcp", "lan_scan": false, "risk": "normal", "apps": [
+    { "name": "FiveM", "preset": "fivem", "category": "game" } ] },
+  { "port": 32400, "proto": "tcp", "probe": "http", "lan_scan": true, "risk": "normal", "apps": [
+    { "name": "Plex Media Server", "preset": "plex", "category": "media" } ] },
+  { "port": 34197, "proto": "udp", "probe": "udp", "lan_scan": false, "risk": "normal", "apps": [
+    { "name": "Factorio", "preset": "factorio", "category": "game" } ] },
+  { "port": 64738, "proto": "udp", "probe": "udp", "lan_scan": false, "risk": "normal", "apps": [
+    { "name": "Mumble (Murmur) Voice Server", "preset": "mumble", "category": "game" } ] }
+]
