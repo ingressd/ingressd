@@ -24,12 +24,32 @@ import (
 //
 // Only new connections are checked: removing or expiring an allowlist entry
 // stops new connections, established ones keep running until idle.
+//
+// Traffic reaches neither the access log nor the per-host usage, so the table
+// also counts it per service, for both engines:
+//
+//   - svc_<name>_in / _out / _conns: named counters, read by internal/l4 for
+//     usage. An apply recreates the table, which restarts them.
+//   - svc_<name>_live: recent new connections, polled for the live preview.
 
 // L4Table is the nftables table holding L4 forwarding and allowlists.
 const L4Table = "ingressd_l4"
 
 // L4AllowSet is the runtime allowlist set (flags timeout) of a service.
 func L4AllowSet(service string) string { return l4ID(service) + "_allow" }
+
+// L4CounterIn counts bytes from players to a service.
+func L4CounterIn(service string) string { return l4ID(service) + "_in" }
+
+// L4CounterOut counts bytes from a service to players.
+func L4CounterOut(service string) string { return l4ID(service) + "_out" }
+
+// L4CounterConns counts a service's new connections (in packets).
+func L4CounterConns(service string) string { return l4ID(service) + "_conns" }
+
+// L4LiveSet holds a service's recent new connections, keyed by client
+// address, protocol and source port.
+func L4LiveSet(service string) string { return l4ID(service) + "_live" }
 
 func l4ID(service string) string { return "svc_" + strings.ReplaceAll(service, "-", "_") }
 
@@ -90,10 +110,30 @@ func renderL4NFT(cfg *config.Config) string {
 	if len(cfg.L4) == 0 {
 		return ""
 	}
-	var sets, filter, svcChains, mark, dnat, snat []string
+	var counters, sets, filter, svcChains, mark, dnat, snat []string
+	var countChains, countForward, countInput, countOutput []string
 	for _, name := range sortedKeys(cfg.L4) {
 		s := cfg.L4[name]
 		id := l4ID(name)
+		for _, c := range []string{L4CounterIn(name), L4CounterOut(name), L4CounterConns(name)} {
+			counters = append(counters, fmt.Sprintf("\tcounter %s {\n\t}\n", c))
+		}
+		sets = append(sets, fmt.Sprintf("\tset %s {\n\t\ttype ipv4_addr . inet_proto . inet_service; size 1024; flags dynamic,timeout; timeout 30s;\n\t}\n", L4LiveSet(name)))
+		countChains = append(countChains, fmt.Sprintf(`	chain count_%[1]s {
+		ct direction original counter name %[2]q
+		ct direction reply counter name %[3]q
+		ct state new counter name %[4]q
+		ct state new add @%[5]s { ip saddr . meta l4proto . th sport }
+	}
+`, id, L4CounterIn(name), L4CounterOut(name), L4CounterConns(name), L4LiveSet(name)))
+		for _, p := range s.Ports() {
+			if s.Engine() == config.L4EngineNFT {
+				countForward = append(countForward, fmt.Sprintf("ct status dnat meta l4proto %s ct original proto-dst %d jump count_%s", p.Proto, p.Port, id))
+			} else {
+				countInput = append(countInput, fmt.Sprintf("%s dport %d jump count_%s", p.Proto, p.Port, id))
+				countOutput = append(countOutput, fmt.Sprintf("%s sport %d counter name %q", p.Proto, p.Port, L4CounterOut(name)))
+			}
+		}
 		var checks []string
 		if s.Restricted() {
 			var elems []string
@@ -151,8 +191,40 @@ func renderL4NFT(cfg *config.Config) string {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "\ntable ip %s {\n", L4Table)
+	for _, c := range counters {
+		b.WriteString(c + "\n")
+	}
 	for _, s := range sets {
 		b.WriteString(s + "\n")
+	}
+	for _, c := range countChains {
+		b.WriteString(c + "\n")
+	}
+	// Before the managed filter chains, so a service's traffic is counted
+	// whatever they do with it. Rejected connections were dropped in
+	// prerouting and never get here.
+	if len(countForward) > 0 {
+		fmt.Fprintf(&b, `	chain count_forward {
+		type filter hook forward priority -10; policy accept;
+		%s
+	}
+
+`, strings.Join(countForward, "\n\t\t"))
+	}
+	if len(countInput) > 0 {
+		fmt.Fprintf(&b, `	chain count_input {
+		type filter hook input priority -10; policy accept;
+		iifname "ix-*" return
+		%s
+	}
+
+	chain count_output {
+		type filter hook output priority -10; policy accept;
+		oifname "ix-*" return
+		%s
+	}
+
+`, strings.Join(countInput, "\n\t\t"), strings.Join(countOutput, "\n\t\t"))
 	}
 	// Traffic from the tunnels (replies, site-initiated flows) is never
 	// subject to the public-facing rules.
