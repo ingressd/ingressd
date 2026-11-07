@@ -143,8 +143,22 @@ func TestHealthAndSignature(t *testing.T) {
 	if health(ok) != nodeproto.HealthOK {
 		t.Error("ok")
 	}
-	if health(append(ok, nodeproto.Check{Name: "tunnel home", Warn: true})) != nodeproto.HealthDegraded {
+	if health(append(ok, nodeproto.Check{Name: "disk space", Warn: true})) != nodeproto.HealthDegraded {
 		t.Error("degraded")
+	}
+	down := func(site string) nodeproto.Check { return nodeproto.Check{Name: "tunnel " + site, Warn: true} }
+	up := func(site string) nodeproto.Check { return nodeproto.Check{Name: "tunnel " + site, OK: true} }
+	if health(append(ok, down("home"), up("office"))) != nodeproto.HealthOK {
+		t.Error("one origin down while another is up is not the node's problem")
+	}
+	if health(append(ok, down("home"))) != nodeproto.HealthOK {
+		t.Error("the only origin being down says nothing about the node")
+	}
+	if health(append(ok, down("home"), down("office"))) != nodeproto.HealthDegraded {
+		t.Error("every origin down points at the node")
+	}
+	if health(append(ok, down("home"), up("office"), nodeproto.Check{Name: checkEdge})) != nodeproto.HealthDown {
+		t.Error("a failing edge still wins")
 	}
 	if health(append(ok, nodeproto.Check{Name: checkEdge})) != nodeproto.HealthDown {
 		t.Error("down")
