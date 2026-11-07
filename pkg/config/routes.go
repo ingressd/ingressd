@@ -71,6 +71,16 @@ func (c *Config) TunnelRoutes(tunnel string) []string {
 	return routes
 }
 
+// routerSiteAddress reports whether a is the site's own address on a router
+// tunnel: a service on the machine ending the tunnel listens there, and may
+// have no other address the tunnel reaches. A connector refuses to serve its
+// own host, so its tunnels do not qualify.
+func (c *Config) routerSiteAddress(tunnel string, a netip.Addr) bool {
+	t := c.Tunnels[tunnel]
+	p, err := netip.ParsePrefix(t.Transit)
+	return err == nil && t.Site == SiteRouter && a == p.Masked().Addr().Next().Next()
+}
+
 // validateTunnelRoutes checks the derived per-address routes: they must not
 // collide with ranges the edge owns, and an address may only be routed down
 // one tunnel (otherwise the edge can't tell which site it means).
@@ -112,7 +122,7 @@ func (c *Config) validateTunnelRoutes(v *validator) {
 			v.add(path, "published address %s is the edge's own public IP", a)
 		}
 		for _, o := range owned {
-			if o.p.Contains(a) {
+			if o.p.Contains(a) && !c.routerSiteAddress(r.tunnel, a) {
 				v.add(path, "published address %s is inside %s (%s), which the edge uses itself", a, o.path, o.p)
 			}
 		}
