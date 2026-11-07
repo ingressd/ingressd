@@ -33,7 +33,13 @@ func renderNetwork(cfg *config.Config, keys Keys) (Network, error) {
 		if t.VirtualPrefix != "" {
 			routes = t.Subnets
 		}
-		allowed := append([]string{netip.PrefixFrom(SiteAddr(transit), 32).String()}, routes...)
+		siteIP := netip.PrefixFrom(SiteAddr(transit), 32).String()
+		allowed := []string{siteIP}
+		for _, r := range routes {
+			if r != siteIP {
+				allowed = append(allowed, r)
+			}
+		}
 		n.Interfaces = append(n.Interfaces, Interface{
 			Name:       ifname,
 			Address:    netip.PrefixFrom(EdgeAddr(transit), transit.Bits()).String(),

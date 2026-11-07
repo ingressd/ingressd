@@ -149,3 +149,39 @@ func TestL4ListenerFamily(t *testing.T) {
 		}
 	}
 }
+
+func TestRouterSiteAddressTarget(t *testing.T) {
+	cfg, err := config.Parse([]byte(`
+version: 1
+edge:
+  public_ipv4: 203.0.113.10
+  admin: { hostname: edge.example.com }
+  acme: { ca: internal }
+tunnels:
+  home:
+    site: router
+    listen_port: 51820
+    transit: 100.64.0.128/30
+l4:
+  game:
+    preset: minecraft_java
+    proxy_protocol: none
+    target: { tunnel: home, address: 100.64.0.130 }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	n, err := renderNetwork(cfg, fakeKeys{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := n.Interfaces[0].Peers[0].AllowedIPs; len(got) != 1 || got[0] != "100.64.0.130/32" {
+		t.Errorf("allowed IPs %v", got)
+	}
+	if nft := renderL4NFT(cfg); !strings.Contains(nft, "dnat to 100.64.0.130:25565") {
+		t.Errorf("nft:%s", nft)
+	}
+}

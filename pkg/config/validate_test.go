@@ -210,6 +210,13 @@ func TestValidate(t *testing.T) {
 		{"published address inside a transit network", func(c *Config) {
 			c.Pools["web"].Origins[0].Address = "http://10.100.1.9:8080"
 		}, "which the edge uses itself"},
+		{"published edge address of a router tunnel", func(c *Config) {
+			c.Pools["web"].Origins[0].Address = "http://10.100.1.1:8080"
+		}, "which the edge uses itself"},
+		{"published site address of a connector tunnel", func(c *Config) {
+			c.Tunnels["office"] = office("10.1.1.0/24", "")
+			c.Apps["nas"] = App{Hosts: []string{"nas.example.com"}, Origin: "http://10.100.2.2:5000", Tunnel: "office"}
+		}, "which the edge uses itself"},
 		{"IPv6 tunnelled origin", func(c *Config) {
 			c.Pools["web"].Origins[0].Address = "http://[fd00::17]:8080"
 		}, "must use IPv4"},
@@ -305,5 +312,13 @@ apps:
 func TestOtherDomainsNeedOnlyLabelSyntax(t *testing.T) {
 	if !validHostname("xn--0.example.com", false) {
 		t.Error("label syntax check changed")
+	}
+}
+
+func TestRouterSiteAddressPublished(t *testing.T) {
+	c := mustParse(t, baseYAML)
+	c.Pools["web"].Origins[0].Address = "http://10.100.1.2:8080"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("a router's own tunnel address was refused: %v", err)
 	}
 }
