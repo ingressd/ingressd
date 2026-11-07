@@ -63,6 +63,19 @@ type Runner struct {
 	upd *updater // self-update state, kept across link restarts (update.go)
 	// sd runs Smart DNS, kept across link restarts (smartdns.go).
 	sd *sdController
+	// told are the warnings already logged, kept across link restarts.
+	told map[string]bool
+}
+
+// warnOnce logs a warning the first time key is seen.
+func (r *Runner) warnOnce(key, msg string, args ...any) {
+	if r.told == nil {
+		r.told = map[string]bool{}
+	}
+	if !r.told[key] {
+		r.told[key] = true
+		r.Log.Warn(msg, args...)
+	}
 }
 
 // errRestart asks Run to rebuild the link after a config change.
@@ -138,12 +151,26 @@ func (r *Runner) runOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	for i := range st.Edges {
+		sanitizeConfig(&st.Edges[i].Config, r.Log)
+	}
 	s := &session{
 		r: r, st: st, log: r.Log, mode: cmp.Or(r.Mode, st.Mode, ModeNetstack),
 		edges: map[wgtypes.Key]*edge{}, gone: map[string]bool{}, restartEdge: map[string]bool{},
 		refresh: make(chan struct{}, 1), started: time.Now().UTC(),
 	}
 	s.discover = !r.NoDiscovery && !st.NoDiscovery
+	st.reach = openReach(r.StatePath, st, r.Log)
+	if p := st.reach.problem; p != "" {
+		r.warnOnce("allowlist "+p, p)
+	}
+	for _, p := range st.refused() {
+		r.warnOnce("refused "+p, "refusing a network outside this connector's allowlist; if it is wanted, run on this host: ingressd-connector allow add "+p, "network", p)
+	}
+	if s.mode == ModeTUN {
+		ifname := cmp.Or(st.Interface, DefaultInterface)
+		st.routes = func() []netip.Prefix { return hostRoutes(ifname) }
+	}
 	if r.upd == nil {
 		r.upd = newUpdater(r.StatePath)
 	}
@@ -173,6 +200,11 @@ func (r *Runner) runOnce(ctx context.Context) error {
 	}
 	defer s.link.Close()
 	s.hostname, _ = os.Hostname()
+	for _, p := range st.Addresses() {
+		if route, clash := st.transitClash(p.String()); clash {
+			r.warnOnce("transit "+p.String(), "transit address overlaps a local route", "address", p, "route", route)
+		}
+	}
 	s.log.Info("connector starting", "tunnel", st.Tunnel(), "mode", s.mode, "link", s.link.Kind(), "edges", len(st.Edges))
 
 	ctx, cancel := context.WithCancelCause(ctx)
@@ -216,12 +248,22 @@ func (s *session) manage(ctx context.Context) {
 			s.rescueTick(ctx, time.Now())
 			s.writeStatus()
 			s.upd.tick(s.healthy())
+			if s.allowlistChanged() {
+				s.log.Info("allowlist changed; restarting link")
+				s.restart(errRestart)
+			}
 		case <-refresh.C:
 			s.reconcile(ctx)
 		case <-s.refresh:
 			s.reconcile(ctx)
 		}
 	}
+}
+
+// allowlistChanged reports whether the file differs from the list in effect.
+func (s *session) allowlistChanged() bool {
+	raw, _ := os.ReadFile(AllowlistPath(s.r.StatePath))
+	return !bytes.Equal(raw, s.stateCopy().reach.raw)
 }
 
 // healthy reports whether some edge has a live tunnel and answered a
@@ -297,7 +339,7 @@ func (s *session) reconcile(ctx context.Context) {
 	// Addresses: add every wanted one, remove the ones no edge uses.
 	inUse := map[netip.Prefix]bool{}
 	for _, k := range order {
-		if p, err := netip.ParsePrefix(want[k].Config.Address); err == nil {
+		if p, ok := transitPrefix(want[k].Config.Address); ok {
 			inUse[p] = true
 			if err := s.link.AddAddress(p); err != nil {
 				s.log.Warn("add transit address", "address", p, "err", err)
@@ -305,7 +347,7 @@ func (s *session) reconcile(ctx context.Context) {
 		}
 	}
 	for _, e := range stop {
-		if p, err := netip.ParsePrefix(e.config().Config.Address); err == nil && !inUse[p] {
+		if p, ok := transitPrefix(e.config().Config.Address); ok && !inUse[p] {
 			_ = s.link.RemoveAddress(p)
 		}
 	}
@@ -343,8 +385,13 @@ func mergeSiblings(st *State, gone map[string]bool, now time.Time) bool {
 		fresh := isFresh(es)
 		anyFresh = anyFresh || fresh
 		for _, sb := range es.Config.Siblings {
-			if _, err := wgtypes.ParseKey(sb.EdgePublicKey); err != nil || sb.Endpoint == "" || sb.Address == "" {
+			if _, err := wgtypes.ParseKey(sb.EdgePublicKey); err != nil || sb.Endpoint == "" || !privateTransit(sb.Address) {
 				continue
+			}
+			if known := st.Edge(sb.EdgePublicKey); known == nil || known.Config.Address != sb.Address {
+				if _, clash := st.transitClash(sb.Address); clash {
+					continue
+				}
 			}
 			if _, ok := listed[sb.EdgePublicKey]; !ok || fresh {
 				listed[sb.EdgePublicKey], parent[sb.EdgePublicKey] = sb, es.Config
@@ -441,13 +488,25 @@ func sharedSettings(st *State) string {
 
 // applyEdgeConfig stores a polled config for an edge. A change to the
 // shared settings restarts the link, a change to the edge's peer restarts
-// that edge, and new siblings are picked up at once.
-func (s *session) applyEdgeConfig(e *edge, tc proto.TunnelConfig) {
+// that edge, and new siblings are picked up at once. A config that could
+// not run is refused and never saved.
+func (s *session) applyEdgeConfig(e *edge, tc proto.TunnelConfig) error {
+	sanitizeConfig(&tc, s.log)
 	s.mu.Lock()
 	es := s.st.Edge(e.key.String())
 	if es == nil {
 		s.mu.Unlock()
-		return
+		return nil
+	}
+	if err := checkConfig(tc, es.Config); err != nil {
+		s.mu.Unlock()
+		return fmt.Errorf("config refused: %w", err)
+	}
+	if tc.Address != es.Config.Address {
+		if route, clash := s.st.transitClash(tc.Address); clash {
+			s.mu.Unlock()
+			return fmt.Errorf("config refused: transit address %q overlaps the local route %s", tc.Address, route)
+		}
 	}
 	before := sharedSettings(s.st)
 	old := es.Config
@@ -468,7 +527,7 @@ func (s *session) applyEdgeConfig(e *edge, tc proto.TunnelConfig) {
 	if before != after {
 		s.log.Info("shared tunnel settings changed", "edge", e.label(), "revision", tc.Revision)
 		s.restart(errRestart)
-		return
+		return nil
 	}
 	if s.r.sd != nil && !bytes.Equal(old.SmartDNS, tc.SmartDNS) {
 		go s.r.sd.update()
@@ -477,6 +536,7 @@ func (s *session) applyEdgeConfig(e *edge, tc proto.TunnelConfig) {
 		s.log.Info("tunnel config updated", "edge", e.label(), "revision", tc.Revision, "siblings", len(tc.Siblings))
 	}
 	s.triggerRefresh()
+	return nil
 }
 
 // markSeen records a successful poll without a config change.
@@ -512,14 +572,14 @@ func (s *session) transparent() bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.st.Transparent()) > 0
+	return len(s.st.allowedTransparent()) > 0
 }
 
 // allowedIPs is an edge peer's AllowedIPs: its /30, plus 0.0.0.0/0 for the
 // owner of transparent replies.
 func (s *session) allowedIPs(e *edge) []netip.Prefix {
 	var out []netip.Prefix
-	if p, err := netip.ParsePrefix(e.config().Config.Address); err == nil {
+	if p, ok := transitPrefix(e.config().Config.Address); ok {
 		out = append(out, p.Masked())
 	}
 	if s.transparent() {
@@ -632,6 +692,7 @@ func (s *session) snapshot() Status {
 		Started:   s.started,
 		Interface: s.link.Kind(),
 	}
+	s.stateCopy().reportReach(&st.Health)
 	var best *EdgeStatus
 	pollOK := false
 	for _, e := range edges {
@@ -707,7 +768,7 @@ func testReachability(ctx context.Context, targets []string) []proto.Reach {
 			c, err := d.DialContext(ctx, "tcp", t)
 			out[i] = proto.Reach{Target: t, OK: err == nil}
 			if err != nil {
-				out[i].Error = err.Error()
+				out[i].Error = "unreachable"
 				return
 			}
 			out[i].Latency = time.Since(start)

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -283,6 +284,48 @@ func TestPortalLockout(t *testing.T) {
 	}
 	if w := p.do("POST", "/login", loginForm("email", "bob@outlook.com", ""), "198.51.100.9"); w.Code != 429 {
 		t.Fatalf("new code allowed during lockout: %d", w.Code)
+	}
+}
+
+func TestPortalLockoutIsPerAddress(t *testing.T) {
+	p := newPortal(t)
+	for i := 0; i < 5; i++ {
+		p.do("POST", "/login", loginForm("code", "alice@gmail.com", "999999"), "198.51.100.9")
+	}
+	if w := p.do("POST", "/login", loginForm("email", "alice@gmail.com", ""), "198.51.100.9"); w.Code != 429 {
+		t.Fatalf("code request from the locked address: %d", w.Code)
+	}
+	if w := p.do("POST", "/login", loginForm("email", "alice@gmail.com", ""), "198.51.100.7"); w.Code != 200 {
+		t.Fatalf("code request from another address: %d", w.Code)
+	}
+	code := p.code("alice@gmail.com")
+	if w := p.do("POST", "/login", loginForm("code", "alice@gmail.com", code), "198.51.100.9"); w.Code != 401 {
+		t.Fatalf("code accepted from the locked address: %d", w.Code)
+	}
+	if w := p.do("POST", "/login", loginForm("code", "alice@gmail.com", code), "198.51.100.7"); w.Code != http.StatusFound {
+		t.Fatalf("sign-in from another address: %d", w.Code)
+	}
+}
+
+func TestPortalFormLimits(t *testing.T) {
+	p := newPortal(t)
+	big := url.Values{"step": {"email"}, "email": {"bob@outlook.com"}, "pad": {strings.Repeat("x", maxFormBytes)}}
+	if w := p.do("POST", "/login", big, "198.51.100.11"); w.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("oversized form: %d", w.Code)
+	}
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	_ = mw.WriteField("step", "email")
+	_ = mw.WriteField("email", "bob@outlook.com")
+	_ = mw.Close()
+	r := httptest.NewRequest("POST", "https://auth.example.com/login", &body)
+	r.Header.Set("Content-Type", mw.FormDataContentType())
+	r.Header.Set("Origin", "https://auth.example.com")
+	w := httptest.NewRecorder()
+	p.h.ServeHTTP(w, r)
+	if r.MultipartForm != nil || !strings.Contains(w.Body.String(), "valid email") {
+		t.Errorf("multipart form was read: %d %s", w.Code, w.Body)
 	}
 }
 

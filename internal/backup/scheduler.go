@@ -169,7 +169,7 @@ func (s *Scheduler) run(ctx context.Context, st *Status) error {
 	if edge == "" {
 		edge = "edge"
 	}
-	name := fmt.Sprintf("ingressd-%s-%s.tar.gz", edge, st.LastAttempt.Format("20060102T150405Z"))
+	name := fmt.Sprintf("ingressd-%s-%s.tar.gz", fileLabel(edge), st.LastAttempt.Format("20060102T150405Z"))
 	path := filepath.Join(dir, name)
 	if err := writeArchive(path, ExportOptions{ConfigDir: s.ConfigDir, KeyPath: s.KeyPath, Passphrase: pass,
 		Version: s.Version, Edge: cfg.Edge.Name, Now: st.LastAttempt}); err != nil {
@@ -209,6 +209,16 @@ func (s *Scheduler) run(ctx context.Context, st *Status) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// fileLabel makes an edge name safe as part of a file name.
+func fileLabel(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '-' || r == '_' || r == '.' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
+			return r
+		}
+		return '-'
+	}, s)
 }
 
 func writeArchive(path string, o ExportOptions) error {

@@ -150,6 +150,14 @@ type Health struct {
 	// connector sends them to one edge only.
 	SmartDNS      *nodeproto.ConnectorSmartDNS `json:"smartdns,omitempty"`
 	SmartDNSUsage []nodeproto.ServiceUsage     `json:"smartdns_usage,omitempty"`
+	// RefusedSubnets are configured networks the site's local allowlist does
+	// not cover, and AllowlistError why that list cannot be used; either
+	// means the site needs `ingressd-connector allow` on its host (additive).
+	RefusedSubnets []string `json:"refused_subnets,omitempty"`
+	AllowlistError string   `json:"allowlist_error,omitempty"`
+	// LANFilterOff: TUN mode could not install its filter, so a usable
+	// allowlist is not being enforced on this host (additive).
+	LANFilterOff bool `json:"lan_filter_off,omitempty"`
 }
 
 // EdgeReport is one edge as the connector sees it. RTTMillis is an EWMA of

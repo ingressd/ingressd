@@ -82,11 +82,13 @@ func (s *Service) panelStart(st *state, req nodeproto.AuthOTPStart) error {
 // panel allows.
 func (s *Service) panelVerify(ctx context.Context, st *state, email, code, ip string) error {
 	o := st.otp
-	lockKey := "lock:email:" + email
-	if locked, err := o.Store.Locked(ctx, lockKey); err != nil {
-		return err
-	} else if locked {
-		return ErrInvalidCode
+	failKey, lockKey := guessKeys(email, ip)
+	for _, key := range []string{"lock:email:" + email, lockKey} {
+		if locked, err := o.Store.Locked(ctx, key); err != nil {
+			return err
+		} else if locked {
+			return ErrInvalidCode
+		}
 	}
 	p := currentPanel()
 	if p == nil {
@@ -100,13 +102,13 @@ func (s *Service) panelVerify(ctx context.Context, st *state, email, code, ip st
 		return ErrPanelUnavailable
 	}
 	if res.OK && res.Email == email {
-		_ = o.Store.ClearHits(ctx, "fail:email:"+email)
+		_ = o.Store.ClearHits(ctx, failKey)
 		return nil
 	}
 	if res.Code == nodeproto.OTPUnavailable {
 		return ErrPanelUnavailable
 	}
-	n, err := o.Store.Hit(ctx, "fail:email:"+email, time.Duration(o.Settings.Lockout))
+	n, err := o.Store.Hit(ctx, failKey, time.Duration(o.Settings.Lockout))
 	if err != nil {
 		return err
 	}

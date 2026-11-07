@@ -351,9 +351,7 @@ type session struct {
 const freshCookie = 30 * time.Second
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
-	for _, k := range identityHeaders {
-		r.Header.Del(k)
-	}
+	stripIdentityHeaders(r.Header)
 	clientID, clientSecret := r.Header.Get("Edge-Client-Id"), r.Header.Get("Edge-Client-Secret")
 	r.Header.Del("Edge-Client-Id")
 	r.Header.Del("Edge-Client-Secret")
@@ -490,6 +488,36 @@ policies:
 		return h.deny(w, http.StatusUnauthorized, "Sign-in required.")
 	}
 	return h.deny(w, http.StatusForbidden, "Access denied.")
+}
+
+// stripIdentityHeaders removes client copies of the identity headers,
+// including "_" spellings (CGI-style origins read them as the same header),
+// and takes those names out of Connection, where they would make the proxy
+// drop the values edge_auth sets as hop-by-hop headers.
+func stripIdentityHeaders(hdr http.Header) {
+	isIdentity := func(name string) bool {
+		name = strings.ReplaceAll(strings.TrimSpace(name), "_", "-")
+		return slices.ContainsFunc(identityHeaders, func(h string) bool { return strings.EqualFold(h, name) })
+	}
+	for k := range hdr {
+		if isIdentity(k) {
+			delete(hdr, k)
+		}
+	}
+	var keep []string
+	changed := false
+	for _, v := range hdr.Values("Connection") {
+		for _, opt := range strings.Split(v, ",") {
+			if isIdentity(opt) {
+				changed = true
+				continue
+			}
+			keep = append(keep, strings.TrimSpace(opt))
+		}
+	}
+	if changed {
+		hdr.Set("Connection", strings.Join(keep, ", "))
+	}
 }
 
 // session verifies the app cookie and removes it from the request so it

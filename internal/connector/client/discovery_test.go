@@ -58,6 +58,37 @@ func TestDiscoverySubnets(t *testing.T) {
 	}
 }
 
+func TestRequestedDiscoveryStaysInsideTheAllowlist(t *testing.T) {
+	ifaces := fakeIfaces(
+		Iface{Name: "eth0", Up: true, Prefixes: []netip.Prefix{pfx("192.168.1.10/24")}},
+		Iface{Name: "eth1", Up: true, Prefixes: []netip.Prefix{pfx("10.1.2.3/24")}},
+		Iface{Name: "eth2", Up: true, Prefixes: []netip.Prefix{pfx("172.16.5.1/24")}},
+		Iface{Name: "eth3", Up: true, Prefixes: []netip.Prefix{pfx("100.64.0.6/24")}},
+	)
+	for _, tc := range []struct {
+		reach *localReach
+		want  []netip.Prefix
+	}{
+		{reachOf("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"), []netip.Prefix{pfx("192.168.1.0/24"), pfx("10.1.2.0/24"), pfx("172.16.5.0/24")}},
+		{reachOf("192.168.1.0/25", "192.168.1.7/32", "10.1.2.9/32"), []netip.Prefix{pfx("192.168.1.0/25"), pfx("10.1.2.9/32")}},
+		{reachOf("198.51.100.0/24"), []netip.Prefix{}},
+		{reachOf(), []netip.Prefix{}},
+		{nil, []netip.Prefix{}},
+	} {
+		e := &edge{s: &session{st: &State{reach: tc.reach}, mode: ModeNetstack}}
+		sc := e.scanner()
+		sc.Interfaces = ifaces
+		sc.Eligible = IsPrivateV4
+		got, err := sc.Subnets()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("list %+v: scans %v, want %v", tc.reach, got, tc.want)
+		}
+	}
+}
+
 func TestDiscoveryHosts(t *testing.T) {
 	self := netip.MustParseAddr("192.168.0.2")
 	if got := hosts(pfx("192.168.0.0/30"), self); len(got) != 1 || got[0].String() != "192.168.0.1" {

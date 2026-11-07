@@ -74,7 +74,8 @@ func renderCaddy(cfg *config.Config, res Resolver, opts Options) (json.RawMessag
 			wild = append(wild, route(wildHosts))
 		}
 	}
-	routes := append(controlRoutes(cfg, opts), exact...)
+	routes := append(controlRoutes(cfg, opts), upgradeFilterRoute())
+	routes = append(routes, exact...)
 	routes = append(routes, wild...)
 	routes = append(routes, obj{"handle": []obj{{
 		"handler": "static_response", "status_code": 404, "body": "Unknown host\n",
@@ -86,6 +87,8 @@ func renderCaddy(cfg *config.Config, res Resolver, opts Options) (json.RawMessag
 	httpApp := obj{"servers": obj{"edge": obj{
 		"listen": []string{fmt.Sprintf(":%d", httpsPort)},
 		"routes": routes,
+		// Early data can be replayed and its client address is unverified.
+		"allow_0rtt": false,
 	}}}
 	if opts.HTTPPort != 0 {
 		httpApp["http_port"] = opts.HTTPPort
@@ -127,6 +130,24 @@ func renderCaddy(cfg *config.Config, res Resolver, opts Options) (json.RawMessag
 	}
 	b, err := json.MarshalIndent(root, "", "  ")
 	return b, err
+}
+
+// upgradeProtocols are the Upgrade values passed on to origins: WebSocket,
+// and the tunnels of the Kubernetes and Docker APIs. The value is matched
+// through its placeholder, which joins repeated headers, so a list never
+// passes.
+const upgradeProtocols = `(?i)^\s*(websocket|spdy/3\.1|tcp)\s*$`
+
+// upgradeFilterRoute drops any other Upgrade header before the app routes; the
+// request then proceeds as plain HTTP.
+func upgradeFilterRoute() obj {
+	return obj{
+		"match": []obj{{
+			"header": obj{"Upgrade": []string{}},
+			"not":    []obj{{"vars_regexp": obj{"{http.request.header.Upgrade}": obj{"pattern": upgradeProtocols}}}},
+		}},
+		"handle": []obj{{"handler": "headers", "request": obj{"delete": []string{"Upgrade"}}}},
+	}
 }
 
 func renderTLS(cfg *config.Config, res Resolver) (obj, error) {

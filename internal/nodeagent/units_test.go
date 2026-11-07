@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"net"
@@ -100,6 +101,40 @@ func TestUsageRecord(t *testing.T) {
 	q2.ack(1)
 	if q2.pendingLen() != 1 {
 		t.Errorf("ack left %d", q2.pendingLen())
+	}
+}
+
+func TestUsageRecordExit(t *testing.T) {
+	q, _ := loadUsage(t.TempDir() + "/u.json")
+	now := time.Now()
+	totals := func(b, c int64) collector {
+		return collector{exits: []nodeproto.ExitStatus{{Name: "node", Sites: []nodeproto.ExitUsage{{Site: "home", Bytes: b, Conns: c}}}}}
+	}
+	u, err := q.record(totals(100, 2), now)
+	if err != nil || u == nil || len(u.Exit) != 1 || u.Exit[0] != (nodeproto.ExitUsage{Site: "home", Bytes: 100, Conns: 2}) {
+		t.Fatalf("first = %+v %v", u, err)
+	}
+	u, _ = q.record(totals(150, 2), now.Add(time.Minute))
+	if u == nil || u.Exit[0].Bytes != 50 || u.Exit[0].Conns != 0 {
+		t.Fatalf("second = %+v", u)
+	}
+	if u, _ = q.record(totals(150, 2), now.Add(2*time.Minute)); u != nil {
+		t.Fatalf("idle = %+v", u)
+	}
+	// The baselines survive a reload; the totals restart with the node.
+	q2, _ := loadUsage(q.path)
+	u, _ = q2.record(totals(30, 1), now.Add(3*time.Minute))
+	if u == nil || u.Exit[0].Bytes != 30 || u.Exit[0].Conns != 1 {
+		t.Fatalf("restart = %+v", u)
+	}
+	// Older panels read the message as before.
+	b, _ := json.Marshal(u)
+	var old struct {
+		Seq   int64             `json:"seq"`
+		Sites []json.RawMessage `json:"sites"`
+	}
+	if err := json.Unmarshal(b, &old); err != nil || old.Seq != u.Seq || !strings.Contains(string(b), `"exit":[{"site":"home"`) {
+		t.Errorf("%s, %v", b, err)
 	}
 }
 

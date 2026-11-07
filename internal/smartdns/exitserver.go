@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"os"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -61,6 +62,46 @@ type ExitServer struct {
 	apiPort    int
 	relayPort  int
 	refused    atomic.Int64
+	usageMu    sync.Mutex
+	usage      map[string]*siteUsage // by tunnel
+	// alerts tracks each site against the daily limits; Run's goroutine only.
+	alerts map[string]*usageWindow
+}
+
+// maxSiteStreams caps one site's open relay streams. A household's devices
+// use far fewer; the cap keeps one site from using up the node's sockets.
+const maxSiteStreams = 1024
+
+// A site past either level in a day is logged, once a day. These are far
+// above a household's streaming, which is what the exit is for: a day of 4K
+// video is under 200 GiB.
+const (
+	exitAlertBytes  = 500 << 30
+	exitAlertConns  = 500_000
+	exitAlertWindow = 24 * time.Hour
+)
+
+// usageWindow is a site's counters at the start of its current day.
+type usageWindow struct {
+	start        time.Time
+	bytes, conns int64
+	alerted      bool
+}
+
+// siteUsage counts one site's use of the exit.
+type siteUsage struct {
+	conns, active, bytes atomic.Int64
+}
+
+func (s *ExitServer) usageFor(site string) *siteUsage {
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+	u := s.usage[site]
+	if u == nil {
+		u = &siteUsage{}
+		s.usage[site] = u
+	}
+	return u
 }
 
 // NewExitServer creates an ExitServer; call Run, then Reconfigure after
@@ -82,6 +123,8 @@ func NewExitServer(o ExitServerOptions) *ExitServer {
 		edges:      newEdgeChecker(),
 		apiPort:    o.APIPort,
 		relayPort:  o.RelayPort,
+		usage:      map[string]*siteUsage{},
+		alerts:     map[string]*usageWindow{},
 	}
 	s.probes = newProber(s.log, o.TraceURL, s.ctx)
 	s.listeners = &listenerSet{log: s.log, running: map[string]io.Closer{}, failed: map[string]string{}}
@@ -110,6 +153,9 @@ func (s *ExitServer) Run(ctx context.Context) {
 		if n%3 == 0 {
 			s.listeners.retry()
 		}
+		if n%30 == 0 {
+			s.checkUsage(time.Now())
+		}
 		st := s.state()
 		if st.egress != nil {
 			s.probes.watch(map[string]*egress{st.egress.exit: st.egress}, time.Now())
@@ -118,6 +164,23 @@ func (s *ExitServer) Run(ctx context.Context) {
 		}
 		if s.statusPath != "" {
 			writeStatusFile(s.statusPath, s.Snapshot())
+		}
+	}
+}
+
+// checkUsage logs sites past a daily limit.
+func (s *ExitServer) checkUsage(now time.Time) {
+	for site, u := range s.usageTotals() {
+		w := s.alerts[site]
+		if w == nil || now.Sub(w.start) >= exitAlertWindow {
+			w = &usageWindow{start: now, bytes: u.Bytes, conns: u.Conns}
+			s.alerts[site] = w
+		}
+		bytes, conns := u.Bytes-w.bytes, u.Conns-w.conns
+		if !w.alerted && (bytes > exitAlertBytes || conns > exitAlertConns) {
+			w.alerted = true
+			s.log.Warn("site is over the daily exit usage limit", "site", site, "bytes", bytes, "connections", conns,
+				"limit_bytes", int64(exitAlertBytes), "limit_connections", exitAlertConns, "since", w.start)
 		}
 	}
 }
@@ -275,6 +338,16 @@ func (s *ExitServer) handleRelay(c net.Conn) {
 		refuse(err.Error(), false)
 		return
 	}
+	if slices.ContainsFunc(req.Addrs, nodeAddrs(e)) {
+		refuse("upstream is this node", false)
+		return
+	}
+	usage := s.usageFor(site)
+	defer usage.active.Add(-1)
+	if usage.active.Add(1) > maxSiteStreams {
+		refuse("too many open streams", false)
+		return
+	}
 	ctx, cancel := context.WithTimeout(s.ctx(), dialTimeout*2+probeTimeout)
 	up, addr, err := dialOrdered(ctx, e, s.edges, normalize(req.Host), req.Addrs, req.Port)
 	cancel()
@@ -283,11 +356,31 @@ func (s *ExitServer) handleRelay(c net.Conn) {
 		return
 	}
 	defer up.Close()
+	usage.conns.Add(1)
 	if err := WriteConnectResponse(c, ConnectResponse{OK: true, Addr: addr.String()}); err != nil {
 		return
 	}
 	_ = c.SetDeadline(time.Time{})
-	pipe(c, up, nil)
+	pipe(c, up, &usage.bytes)
+}
+
+// nodeAddrs returns a test for this node's own addresses: its public IP and
+// those of its interfaces.
+func nodeAddrs(e *egress) func(netip.Addr) bool {
+	own := map[netip.Addr]bool{}
+	if a, err := netip.ParseAddr(e.public); err == nil {
+		own[a.Unmap()] = true
+	}
+	if ifs, err := net.InterfaceAddrs(); err == nil {
+		for _, ia := range ifs {
+			if n, ok := ia.(*net.IPNet); ok {
+				if a, ok := netip.AddrFromSlice(n.IP); ok {
+					own[a.Unmap()] = true
+				}
+			}
+		}
+	}
+	return func(a netip.Addr) bool { return own[a.Unmap()] }
 }
 
 // Exits reports the node exit (node agent hook).
@@ -297,6 +390,9 @@ func (s *ExitServer) Exits() []nodeproto.ExitStatus {
 		return nil
 	}
 	es := exitStatus(e.exit, e, s.probes, s.edges)
+	for site, u := range s.usageTotals() {
+		es.Sites = append(es.Sites, nodeproto.ExitUsage{Site: site, Bytes: u.Bytes, Conns: u.Conns})
+	}
 	return []nodeproto.ExitStatus{es}
 }
 
@@ -308,6 +404,15 @@ type ExitStatusFile struct {
 	Exits     []nodeproto.ExitStatus `json:"exits"`
 	Edges     []EdgeResult           `json:"edges"`
 	Refused   int64                  `json:"refused"`
+	// Usage is each site's use of the exit since this process started.
+	Usage map[string]ExitUsage `json:"usage,omitempty"`
+}
+
+// ExitUsage is one site's relay use.
+type ExitUsage struct {
+	Conns  int64 `json:"conns"`
+	Active int64 `json:"active"`
+	Bytes  int64 `json:"bytes"`
 }
 
 // Snapshot returns the node exit's status.
@@ -321,6 +426,20 @@ func (s *ExitServer) Snapshot() ExitStatusFile {
 		out.Exits = []nodeproto.ExitStatus{}
 	}
 	slices.Sort(out.Sites)
+	if t := s.usageTotals(); len(t) > 0 {
+		out.Usage = t
+	}
+	return out
+}
+
+// usageTotals is each site's use of the exit since this process started.
+func (s *ExitServer) usageTotals() map[string]ExitUsage {
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+	out := make(map[string]ExitUsage, len(s.usage))
+	for site, u := range s.usage {
+		out[site] = ExitUsage{Conns: u.conns.Load(), Active: u.active.Load(), Bytes: u.bytes.Load()}
+	}
 	return out
 }
 

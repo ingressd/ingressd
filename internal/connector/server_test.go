@@ -29,6 +29,23 @@ func (fakeKeys) EdgePublic(string) (string, error) {
 	return "Xk1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaA=", nil
 }
 
+func TestConnectorSubnetsNamePublishedAddressesUnderADefaultRoute(t *testing.T) {
+	cfg := &config.Config{
+		Tunnels: map[string]config.Tunnel{"all": {Subnets: []string{"0.0.0.0/0"}}, "lan": {Subnets: []string{"10.0.1.0/24"}}},
+		Apps: map[string]config.App{
+			"a": {Tunnel: "all", Origin: "http://203.0.113.7:80"},
+			"b": {Tunnel: "lan", Origin: "http://10.0.1.5:80"},
+		},
+		L4: map[string]config.L4Service{"game": {Target: config.L4Target{Tunnel: "all", Address: "203.0.113.8"}}},
+	}
+	if got, want := connectorSubnets(cfg, "all"), []string{"0.0.0.0/0", "203.0.113.7/32", "203.0.113.8/32"}; !slices.Equal(got, want) {
+		t.Errorf("subnets = %v, want %v", got, want)
+	}
+	if got, want := connectorSubnets(cfg, "lan"), cfg.TunnelRoutes("lan"); !slices.Equal(got, want) {
+		t.Errorf("subnets = %v, want %v", got, want)
+	}
+}
+
 func testConfig(port int) *config.Config {
 	return &config.Config{
 		Edge: config.Edge{Admin: config.Admin{Hostname: "edge.example.test"}},

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
@@ -140,7 +141,7 @@ func SiteConfig(cfg *config.Config, keys Keys, name string, opts SiteOptions) (s
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "# ingressd tunnel %q — import on the site (%s)\n", name, cmp.Or(t.Vendor, t.Site))
+	fmt.Fprintf(&b, "# ingressd tunnel %q — import on the site (%s)\n", name, oneLine(cmp.Or(t.Vendor, t.Site)))
 	b.WriteString("[Interface]\n")
 	fmt.Fprintf(&b, "PrivateKey = %s\n", sitePriv)
 	if opts.Format != FormatWG {
@@ -155,6 +156,17 @@ func SiteConfig(cfg *config.Config, keys Keys, name string, opts SiteOptions) (s
 	fmt.Fprintf(&b, "AllowedIPs = %s\n", transit.Masked())
 	fmt.Fprintf(&b, "PersistentKeepalive = %d\n", t.Keepalive)
 	return b.String(), nil
+}
+
+// oneLine removes control characters, so s stays on its line of the
+// generated file.
+func oneLine(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // Status is the live state of one tunnel on the edge.

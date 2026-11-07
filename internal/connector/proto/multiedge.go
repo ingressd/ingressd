@@ -61,8 +61,9 @@ type Sibling struct {
 // cache), so it authorises exactly the request it was made for.
 //
 // Rollout: edges accept both and advertise v2 in TunnelConfig.KeyAuth; a
-// connector sends v2 to an edge whose config advertises it, else v1, so
-// either side may update first. v1 acceptance can be removed once every
+// connector sends v2 to an edge whose config advertises it, else v1, and
+// tries v2 first on a learned edge whose config it has not seen, using v1
+// if that edge answers 401, so either side may update first. v1 acceptance can be removed once every
 // supported connector sends v2 (the minimum supported version is at or
 // above the first release with v2) — remove after 2027-06.
 const KeyAuthScheme = "IngressdKey"

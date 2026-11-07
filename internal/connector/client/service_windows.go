@@ -6,7 +6,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"unsafe"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 )
@@ -15,6 +20,9 @@ import (
 func InstallService(o ServiceOptions) (string, error) {
 	exe, err := o.exe()
 	if err != nil {
+		return "", err
+	}
+	if err := checkServicePath(exe); err != nil {
 		return "", err
 	}
 	m, err := mgr.Connect()
@@ -47,6 +55,64 @@ func InstallService(o ServiceOptions) (string, error) {
 		}
 	}
 	return ServiceName, nil
+}
+
+// checkServicePath refuses a binary ordinary users could replace, because
+// the service runs it as SYSTEM.
+func checkServicePath(exe string) error {
+	const fix = `move it to a folder only administrators can write to, such as C:\Program Files\ingressd, then install the service`
+	dirs := []string{os.Getenv("SystemDrive") + `\Users`}
+	for _, v := range []string{"USERPROFILE", "LOCALAPPDATA", "APPDATA", "TEMP", "TMP", "PUBLIC"} {
+		dirs = append(dirs, os.Getenv(v))
+	}
+	for _, d := range dirs {
+		if d != "" && insideDir(exe, d) {
+			return fmt.Errorf("%s is in a user folder: %s", exe, fix)
+		}
+	}
+	for _, p := range []string{exe, filepath.Dir(exe)} {
+		if usersCanWrite(p) {
+			return fmt.Errorf("ordinary users can change %s: %s", p, fix)
+		}
+	}
+	return nil
+}
+
+func insideDir(path, dir string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, `..\`)
+}
+
+// usersCanWrite reports whether path's DACL gives a broad group write
+// access. A DACL that cannot be read reports false.
+func usersCanWrite(path string) bool {
+	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return false
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return false
+	}
+	if dacl == nil {
+		return true
+	}
+	const write = windows.FILE_WRITE_DATA | windows.FILE_APPEND_DATA | windows.DELETE | windows.WRITE_DAC |
+		windows.WRITE_OWNER | windows.GENERIC_WRITE | windows.GENERIC_ALL
+	for i := range uint32(dacl.AceCount) {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if windows.GetAce(dacl, i, &ace) != nil || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE ||
+			ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0 || ace.Mask&write == 0 {
+			continue
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		for _, broad := range []windows.WELL_KNOWN_SID_TYPE{windows.WinWorldSid, windows.WinAuthenticatedUserSid, windows.WinBuiltinUsersSid, windows.WinInteractiveSid} {
+			if sid.IsWellKnown(broad) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type winService struct {

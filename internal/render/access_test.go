@@ -4,6 +4,8 @@ package render
 
 import (
 	"encoding/json"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -75,7 +77,9 @@ func TestAccessStructure(t *testing.T) {
 			HTTP struct {
 				Servers map[string]struct {
 					Routes []struct {
-						Match  []map[string][]string
+						Match []struct {
+							Host []string
+						}
 						Handle []struct {
 							Routes []struct {
 								Handle []map[string]any
@@ -91,10 +95,10 @@ func TestAccessStructure(t *testing.T) {
 	}
 	first := map[string]map[string]any{}
 	for _, r := range root.Apps.HTTP.Servers["edge"].Routes {
-		if len(r.Match) == 0 || len(r.Handle) == 0 || len(r.Handle[0].Routes) == 0 {
+		if len(r.Match) == 0 || len(r.Match[0].Host) == 0 || len(r.Handle) == 0 || len(r.Handle[0].Routes) == 0 {
 			continue
 		}
-		first[r.Match[0]["host"][0]] = r.Handle[0].Routes[0].Handle[0]
+		first[r.Match[0].Host[0]] = r.Handle[0].Routes[0].Handle[0]
 	}
 	if h := first["web.example.com"]; h["handler"] != "edge_auth" || h["app"] != "web" || h["portal_url"] != "https://auth.example.com" {
 		t.Errorf("protected app's first handler = %v", h)
@@ -108,3 +112,27 @@ func TestAccessStructure(t *testing.T) {
 }
 
 func toJSON(v any) string { b, _ := json.Marshal(v); return string(b) }
+
+func TestIdentityHeaderSpellings(t *testing.T) {
+	got := identityHeaderSpellings()
+	for _, want := range []string{"X-Edge-User", "X_Edge_User", "X-Edge_User", "X_Edge-User-Email", "Edge_Jwt_Assertion", "X_Edge_Session_Id"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("missing %s in %v", want, got)
+		}
+	}
+}
+
+func TestEdgeServerSettings(t *testing.T) {
+	s := string(renderAccess(t).Caddy)
+	for _, want := range []string{`"allow_0rtt": false`, `"{http.request.header.Upgrade}"`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("caddy config missing %s", want)
+		}
+	}
+	re := regexp.MustCompile(upgradeProtocols)
+	for v, ok := range map[string]bool{"websocket": true, "WebSocket": true, "SPDY/3.1": true, "tcp": true, "h2c": false, "h2c,websocket": false, "websocket, h2c": false} {
+		if re.MatchString(v) != ok {
+			t.Errorf("Upgrade %q allowed = %v", v, !ok)
+		}
+	}
+}

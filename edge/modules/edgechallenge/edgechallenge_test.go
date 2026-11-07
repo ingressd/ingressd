@@ -149,9 +149,11 @@ func TestGoodBots(t *testing.T) {
 		"crawl-1.googlebot.com.evil.net":  {"203.0.113.9"},
 		"203.0.113.10":                    {"fake.googlebot.com."},
 		"fake.googlebot.com":              {"192.0.2.1"},
+		"203.0.113.11":                    {"vm.bc.googleusercontent.com."},
+		"vm.bc.googleusercontent.com":     {"203.0.113.11"},
 	}
 	ua := "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
-	for ip, want := range map[string]bool{"66.249.66.1": true, "203.0.113.9": false, "203.0.113.10": false} {
+	for ip, want := range map[string]bool{"66.249.66.1": true, "203.0.113.9": false, "203.0.113.10": false, "203.0.113.11": false} {
 		if got := c.isGoodBot(context.Background(), netip.MustParseAddr(ip), ua); got != want {
 			t.Errorf("isGoodBot(%s) = %v, want %v", ip, got, want)
 		}

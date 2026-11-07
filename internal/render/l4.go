@@ -219,9 +219,15 @@ func l4CaddyApp(cfg *config.Config) obj {
 		if a, err := netip.ParseAddr(addr); err == nil {
 			addr = Virtual(cfg.Tunnels[s.Target.Tunnel], a).String()
 		}
+		// Access checks and limits live in `table ip`, so services using them
+		// listen on IPv4.
+		network := "tcp"
+		if s.Restricted() || s.Limits != nil {
+			network = "tcp4"
+		}
 		for _, p := range s.Ports() {
 			servers[fmt.Sprintf("l4_%s_%d", strings.ReplaceAll(name, "-", "_"), p.Port)] = obj{
-				"listen": []string{fmt.Sprintf("tcp/:%d", p.Port)},
+				"listen": []string{fmt.Sprintf("%s/:%d", network, p.Port)},
 				"routes": []obj{{
 					"handle": []obj{{
 						"handler":        "proxy",

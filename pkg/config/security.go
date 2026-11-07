@@ -433,6 +433,11 @@ func validateWAF(v *validator, p string, w *WAF) {
 	}
 }
 
+// MaxRateLimitRequests is the most requests a blocking rate limit counts per
+// key: the edge keeps a ring of that size for every client key. Larger stored
+// values stay valid and are clamped when rendered.
+const MaxRateLimitRequests = 100_000
+
 func validateRateLimit(v *validator, p string, r RateLimitRule) {
 	if !safePathRe.MatchString(r.Match) {
 		v.add(p+".match", "must be a path pattern starting with /, got %q", r.Match)

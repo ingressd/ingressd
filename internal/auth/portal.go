@@ -116,6 +116,23 @@ func parseTarget(cfg *config.Config, app, rd string) (*target, error) {
 	return &target{app: app, cfg: a, rd: u, list: ListFor(a, u.EscapedPath())}, nil
 }
 
+// maxFormBytes bounds a sign-in form post; its largest field is the 2 KiB
+// return URL.
+const maxFormBytes = 64 << 10
+
+// parseForm reads the request's urlencoded form, bounded. Parsing it here
+// also keeps FormValue from reading multipart bodies: no portal form uses
+// them. It writes the response and returns false if the body is too large.
+func parseForm(w http.ResponseWriter, r *http.Request) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
+	var tooLarge *http.MaxBytesError
+	if err := r.ParseForm(); errors.As(err, &tooLarge) {
+		http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
+		return false
+	}
+	return true
+}
+
 func (s *Service) serveHome(w http.ResponseWriter, r *http.Request) {
 	st, err := s.state()
 	if err != nil {
@@ -141,6 +158,9 @@ func (s *Service) serveLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodPost && !sameOrigin(r, st.cfg.Access.PortalHost) {
 		http.Error(w, "cross-site request rejected", http.StatusForbidden)
+		return
+	}
+	if !parseForm(w, r) {
 		return
 	}
 	app, rd, nonce := r.FormValue("app"), r.FormValue("rd"), r.FormValue("n")
@@ -359,6 +379,9 @@ func (s *Service) ServeLogin(w http.ResponseWriter, r *http.Request, f LoginFlow
 	st, err := s.state()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	if !parseForm(w, r) {
 		return
 	}
 	pd := pageData{Title: f.Title, Hidden: f.Hidden, Action: r.URL.Path, FormOrigin: f.FormOrigin}

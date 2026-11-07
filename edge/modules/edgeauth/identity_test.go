@@ -135,3 +135,25 @@ func TestIdentityFactsAndHeaderTokens(t *testing.T) {
 		t.Errorf("spoofed X-Edge-User reached the origin: %s", body)
 	}
 }
+
+func TestStripIdentityHeaders(t *testing.T) {
+	h := http.Header{}
+	h.Set("X-Edge-User", "a")
+	h.Set("X_Edge_User_Email", "a")
+	h.Set("X-Edge_Service-Token", "a")
+	h.Set("Accept", "*/*")
+	h.Set("X_Other", "kept")
+	h.Set("Connection", "keep-alive, Edge-Jwt-Assertion, x_edge_user, Upgrade")
+	stripIdentityHeaders(h)
+	if len(h) != 3 || h.Get("Accept") == "" || h.Get("X_Other") == "" {
+		t.Errorf("headers = %v", h)
+	}
+	if got := h.Get("Connection"); got != "keep-alive, Upgrade" {
+		t.Errorf("Connection = %q", got)
+	}
+	h = http.Header{"Connection": {"Upgrade"}}
+	stripIdentityHeaders(h)
+	if got := h.Get("Connection"); got != "Upgrade" {
+		t.Errorf("Connection = %q", got)
+	}
+}

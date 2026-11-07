@@ -20,6 +20,7 @@ import (
 	"github.com/ingressd/ingressd/internal/observe"
 	"github.com/ingressd/ingressd/internal/pipeline"
 	"github.com/ingressd/ingressd/internal/secrets"
+	"github.com/ingressd/ingressd/pkg/config"
 	"github.com/ingressd/ingressd/pkg/nodeproto"
 	"github.com/ingressd/ingressd/test/fakepanel"
 )
@@ -549,6 +550,53 @@ func TestSSHPortGuard(t *testing.T) {
 	a, _ = h.panel.SendSnapshot(h.ctx(), strings.Replace(testConfig, "  acme:", "  ssh_port: 2222\n  acme:", 1), fakepanel.SnapshotOptions{})
 	if !a.OK {
 		t.Errorf("snapshot with the right ssh_port rejected: %+v", a)
+	}
+}
+
+func TestSnapshotDropsNodeOnlySettings(t *testing.T) {
+	h := newHarness(t)
+	h.start()
+	defer h.stop()
+	yaml := strings.Replace(testConfig, "  acme:", "  crowdsec: { enabled: true, lapi_url: 'https://lapi.example.com', api_key: secret://k }\n  acme:", 1) + `backups:
+  schedule: not-a-schedule
+  git_remote: https://git.example.com/x.git
+alerts:
+  channels:
+    hook: { type: webhook, url: https://hook.example.com/x }
+email:
+  provider: smtp
+  from: a@example.com
+  smtp: { host: mail.example.com, port: 587, tls: starttls, password: secret://k }
+`
+	a, err := h.panel.SendSnapshot(h.ctx(), yaml, fakepanel.SnapshotOptions{})
+	if err != nil || !a.OK {
+		t.Fatalf("snapshot: %+v %v", a, err)
+	}
+	b, _ := os.ReadFile(h.pipe.ConfigPath)
+	cfg, err := config.Parse(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasNodeOnly(cfg) || cfg.Email.Provider != config.EmailPanel || len(cfg.Tunnels) == 0 {
+		t.Errorf("applied config:\n%s", b)
+	}
+	if restored, err := RestoreSnapshotConfig(h.opts.StateDir, h.pipe.ConfigPath); restored || err != nil {
+		t.Errorf("applied config differs from the recorded snapshot: %v %v", restored, err)
+	}
+
+	merged := "x-extra: &extra\n  backups: { schedule: '@daily' }\n<<: *extra\n" + testConfig
+	if a, _ := h.panel.SendSnapshot(h.ctx(), merged, fakepanel.SnapshotOptions{}); a.OK {
+		t.Errorf("merged settings accepted: %+v", a)
+	}
+}
+
+func TestDropNodeOnlyKeepsOtherConfig(t *testing.T) {
+	const y = "# Compiled by the panel.\nversion: 1\nemail: { provider: panel }\n"
+	if got, dropped := dropNodeOnly(y); got != y || dropped != nil {
+		t.Errorf("config changed: %q %v", got, dropped)
+	}
+	if got, dropped := dropNodeOnly("{not yaml"); got != "{not yaml" || dropped != nil {
+		t.Errorf("unparsable config changed: %q %v", got, dropped)
 	}
 }
 

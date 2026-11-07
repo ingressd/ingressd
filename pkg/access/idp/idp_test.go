@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ingressd/ingressd/pkg/access"
 	"github.com/ingressd/ingressd/pkg/access/idp"
 	"github.com/ingressd/ingressd/pkg/access/idp/idptest"
 	"github.com/ingressd/ingressd/pkg/config"
@@ -129,12 +130,87 @@ func TestOIDCRejects(t *testing.T) {
 	}
 }
 
+func TestMicrosoftRoleTenants(t *testing.T) {
+	const tid = "11111111-2222-3333-4444-555555555555"
+	eng := access.NewEngine(&config.Config{Policies: map[string]config.Policy{
+		"admins": {Action: config.ActionAllow, Include: []config.Selector{{MicrosoftRole: config.StringList{"Admin"}}}},
+	}})
+	for _, tc := range []struct {
+		tenant, tid string
+		match       bool
+	}{
+		{"", tid, false},
+		{"common", tid, false},
+		{"organizations", tid, false},
+		{"consumers", config.MicrosoftConsumersTenant, false},
+		{config.MicrosoftConsumersTenant, config.MicrosoftConsumersTenant, false},
+		{tid, tid, true},
+	} {
+		t.Run("tenant="+tc.tenant, func(t *testing.T) {
+			s := fake(t)
+			s.SetUser("microsoft", idptest.User{Sub: "x", OID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", TID: tc.tid, Roles: []string{"Admin"}})
+			p := prov(s, "microsoft")
+			p.Tenant = tc.tenant
+			id, err := signIn(t, p, idp.Wants{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Contains(id.Attrs, "microsoft_tenant:"+tc.tid) {
+				t.Errorf("missing tenant in %v", id.Attrs)
+			}
+			d := eng.Evaluate([]string{"admins"}, access.UserIdentity(id.Principal(), id.Method, id.Attrs))
+			if d.Allowed() != tc.match {
+				t.Errorf("allowed = %v, want %v (attrs %v)", d.Allowed(), tc.match, id.Attrs)
+			}
+		})
+	}
+}
+
+func TestMicrosoftUnboundRoles(t *testing.T) {
+	const tid = "11111111-2222-3333-4444-555555555555"
+	role := []config.Selector{{MicrosoftRole: config.StringList{"Guest"}}}
+	everyone := []config.Selector{{Everyone: true}}
+	tenant := []config.Selector{{MicrosoftTenant: config.StringList{tid}}}
+	eng := access.NewEngine(&config.Config{Policies: map[string]config.Policy{
+		"paired":   {Action: config.ActionAllow, Include: role, Require: tenant},
+		"excluded": {Action: config.ActionAllow, Include: everyone, Exclude: role},
+		"denied":   {Action: config.ActionDeny, Include: role},
+		"open":     {Action: config.ActionAllow, Include: everyone},
+		"lockdown": {Action: config.ActionDeny, Include: everyone, Exclude: role},
+		"pinned":   {Action: config.ActionDeny, Include: everyone, Require: tenant, Exclude: role},
+	}})
+	s := fake(t)
+	s.SetUser("microsoft", idptest.User{Sub: "x", OID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", TID: tid, Roles: []string{"Guest"}})
+	id, err := signIn(t, prov(s, "microsoft"), idp.Wants{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	who := access.UserIdentity(id.Principal(), id.Method, access.KeepAttrs(id.Attrs, eng.ReferencedAttrs()))
+	if !eng.Evaluate([]string{"paired"}, who).Allowed() {
+		t.Error("a role with a required tenant should match")
+	}
+	if eng.Evaluate([]string{"excluded"}, who).Allowed() {
+		t.Error("an excluded role should still exclude")
+	}
+	if eng.Evaluate([]string{"denied", "open"}, who).Allowed() {
+		t.Error("a deny policy on a role should still deny")
+	}
+	if eng.Evaluate([]string{"lockdown", "open"}, who).Allowed() {
+		t.Error("an exclude on a deny policy needs a required tenant")
+	}
+	if !eng.Evaluate([]string{"pinned", "open"}, who).Allowed() {
+		t.Error("an exclude on a deny policy with a required tenant should match")
+	}
+}
+
 func TestMicrosoft(t *testing.T) {
 	s := fake(t)
 	tid := "11111111-2222-3333-4444-555555555555"
 	s.SetUser("microsoft", idptest.User{Sub: "x", OID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", TID: tid, Email: "ann@corp.example",
 		Groups: []string{"99999999-8888-7777-6666-555555555555"}, Roles: []string{"Admin"}})
-	id, err := signIn(t, prov(s, "microsoft"), idp.Wants{})
+	single := prov(s, "microsoft")
+	single.Tenant = tid
+	id, err := signIn(t, single, idp.Wants{})
 	if err != nil {
 		t.Fatal(err)
 	}

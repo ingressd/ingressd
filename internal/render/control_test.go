@@ -30,10 +30,20 @@ func TestMachineHost(t *testing.T) {
 		return m
 	}
 	hosts := func(m map[string]any) []string {
-		r := m["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)["edge"].(map[string]any)["routes"].([]any)[0].(map[string]any)
 		var out []string
-		for _, h := range r["match"].([]any)[0].(map[string]any)["host"].([]any) {
-			out = append(out, h.(string))
+		for _, r := range m["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)["edge"].(map[string]any)["routes"].([]any) {
+			match, _ := r.(map[string]any)["match"].([]any)
+			if len(match) == 0 {
+				continue
+			}
+			hs, ok := match[0].(map[string]any)["host"].([]any)
+			if !ok {
+				continue
+			}
+			for _, h := range hs {
+				out = append(out, h.(string))
+			}
+			break
 		}
 		return out
 	}

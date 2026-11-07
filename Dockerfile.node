@@ -27,6 +27,7 @@ ARG COMMIT=none
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY edge/go.mod edge/go.sum ./edge/
+COPY edge/third_party/coraza-coreruleset/go.mod ./edge/third_party/coraza-coreruleset/
 RUN --mount=type=cache,target=/go/pkg/mod go mod download && cd edge && go mod download
 COPY . .
 ENV CGO_ENABLED=0

@@ -70,7 +70,12 @@ func newRootCmd() *cobra.Command {
 			"edge URL, the token and, for edges without a public certificate, the CA to\n" +
 			"pin. The two-argument form takes the edge URL and token separately.\n\n" +
 			"A join string of \"-\" is read from standard input, which keeps the\n" +
-			"token out of the process list (the installer does this).",
+			"token out of the process list (the installer does this).\n\n" +
+			"The edges can only reach networks on this host's allowlist. By default that\n" +
+			"is the private networks, this host's own LAN addresses among them, plus what\n" +
+			"the site is configured for right now. Use --allow to narrow it to the networks\n" +
+			"this site needs. Anything outside the list, such as an origin on a public\n" +
+			"address, needs `ingressd-connector allow add`.",
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 1 {
@@ -95,6 +100,7 @@ func newRootCmd() *cobra.Command {
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Enrolled tunnel %q (site address %s, %s mode). State saved to %s.\nStart it with: ingressd-connector run (or install-service)\n",
 				st.Tunnel(), st.Primary().Config.Address, st.Mode, statePath)
+			printReach(cmd.OutOrStdout(), client.DescribeReach(statePath, st))
 			return nil
 		},
 	}
@@ -106,6 +112,8 @@ func newRootCmd() *cobra.Command {
 	ef.StringVar(&eo.Interface, "interface", "", "TUN-mode interface name (default "+client.DefaultInterface+")")
 	ef.BoolVar(&eo.Masquerade, "masquerade", true, "TUN mode: masquerade tunnel traffic to the LAN so hosts reply through this machine (set --masquerade=false only when this host is the LAN's router)")
 	ef.BoolVar(&eo.NoDiscovery, "no-discovery", false, "never scan the LAN for services when the edge asks (stored in the state file)")
+	ef.StringSliceVar(&eo.Allow, "allow", nil, "networks the edges may reach through this host, comma-separated, replacing the default (private networks plus what the site is configured for now)")
+	ef.BoolVar(&eo.AllowAnyNetwork, "allow-any-network", false, "accept 0.0.0.0/0 or ::/0 in --allow: the edges may then reach everything this host can")
 
 	r := &client.Runner{}
 	run := &cobra.Command{
@@ -138,7 +146,11 @@ func newRootCmd() *cobra.Command {
 				return err
 			}
 			s, _ := client.LoadStatus(statePath)
-			return printStatus(cmd.OutOrStdout(), st, s, time.Now())
+			if err := printStatus(cmd.OutOrStdout(), st, s, time.Now()); err != nil {
+				return err
+			}
+			printReach(cmd.OutOrStdout(), client.DescribeReach(statePath, st))
+			return nil
 		},
 	}
 
@@ -175,7 +187,7 @@ func newRootCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), "ingressd-connector", version.String())
 			},
 		},
-		enroll, run, status, install, newDiscoverCmd(&statePath), newSmartDNSCmd(&statePath), newUpgradeHelperCmd(), newVerifySumsCmd(),
+		enroll, run, status, install, newAllowCmd(&statePath), newDiscoverCmd(&statePath), newSmartDNSCmd(&statePath), newUpgradeHelperCmd(), newVerifySumsCmd(),
 	)
 	return root
 }

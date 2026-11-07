@@ -24,6 +24,7 @@ import (
 	// ingressd modules.
 	_ "github.com/ingressd/ingressd/edge/modules/edgeauth"
 	_ "github.com/ingressd/ingressd/edge/modules/edgechallenge"
+	_ "github.com/ingressd/ingressd/edge/modules/edgeclientnet"
 	_ "github.com/ingressd/ingressd/edge/modules/edgefallback"
 	_ "github.com/ingressd/ingressd/edge/modules/edgeforward"
 	_ "github.com/ingressd/ingressd/edge/modules/edgehello"

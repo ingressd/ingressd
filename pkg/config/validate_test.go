@@ -275,3 +275,35 @@ func TestValidate(t *testing.T) {
 		})
 	}
 }
+
+func TestServedHostnamesMustConvert(t *testing.T) {
+	base := func(host string) string {
+		return `
+version: 1
+edge: { acme: { ca: internal } }
+apps:
+  web: { hosts: ["` + host + `"], origin: "http://192.0.2.10:80" }
+`
+	}
+	for host, ok := range map[string]bool{
+		"web.example.com":       true,
+		"xn--bcher-kva.example": true,
+		"*.xn--bcher-kva.test":  true,
+		"xn--0.example.com":     false,
+		"*.xn--0.example.com":   false,
+	} {
+		c, err := Parse([]byte(base(host)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Validate(); (err == nil) != ok {
+			t.Errorf("%s: Validate = %v", host, err)
+		}
+	}
+}
+
+func TestOtherDomainsNeedOnlyLabelSyntax(t *testing.T) {
+	if !validHostname("xn--0.example.com", false) {
+		t.Error("label syntax check changed")
+	}
+}

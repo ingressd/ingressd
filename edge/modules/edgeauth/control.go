@@ -96,7 +96,8 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) error {
 	})
 	http.SetCookie(w, &http.Cookie{Name: h.flowCookie, Value: "", Path: flowCookiePath, MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
 	w.Header().Set("Cache-Control", "no-store")
-	http.Redirect(w, r, rd.RequestURI(), http.StatusFound)
+	// A path of "//x" would read as a host in a relative Location.
+	http.Redirect(w, r, "/"+strings.TrimLeft(rd.RequestURI(), "/"), http.StatusFound)
 	return nil
 }
 

@@ -108,6 +108,9 @@ func ensureIFB(name string) (netlink.Link, error) {
 // with an fq_codel leaf.
 func ensureHTB(link netlink.Link, rateMbit int) error {
 	qs, err := netlink.QdiscList(link)
+	if errors.Is(err, unix.EOPNOTSUPP) {
+		return fmt.Errorf("bandwidth caps need traffic control, which this kernel does not support: %w", err)
+	}
 	if err != nil {
 		return err
 	}
@@ -223,6 +226,10 @@ func delIngress(link netlink.Link) error {
 // longer shaped.
 func removeShaping(link netlink.Link) error {
 	qs, err := netlink.QdiscList(link)
+	if errors.Is(err, unix.EOPNOTSUPP) {
+		// A kernel without traffic control has nothing to remove.
+		return nil
+	}
 	if err != nil {
 		return err
 	}

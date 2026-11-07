@@ -4,6 +4,7 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/netip"
@@ -22,15 +23,20 @@ type wsRelay struct {
 	local *net.UDPConn
 	ws    *websocket.Conn
 	peer  atomic.Pointer[netip.AddrPort]
-	done  chan struct{}
-	once  sync.Once
-	err   error
+	// source reports whether a local sender is the WireGuard socket.
+	source func(netip.AddrPort) bool
+	done   chan struct{}
+	once   sync.Once
+	err    error
 }
 
 // dialRelay connects the WebSocket and starts relaying.
-func dialRelay(ctx context.Context, url string, hc *http.Client, header http.Header) (*wsRelay, error) {
-	ws, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPClient: hc, HTTPHeader: header})
+func dialRelay(ctx context.Context, url string, hc *http.Client, header http.Header, source func(netip.AddrPort) bool) (*wsRelay, error) {
+	ws, resp, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPClient: hc, HTTPHeader: header})
 	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusUnauthorized {
+			return nil, fmt.Errorf("%w: %w", errRelayUnauthorized, err)
+		}
 		return nil, err
 	}
 	ws.SetReadLimit(1 << 16)
@@ -39,7 +45,7 @@ func dialRelay(ctx context.Context, url string, hc *http.Client, header http.Hea
 		ws.CloseNow()
 		return nil, err
 	}
-	r := &wsRelay{local: local, ws: ws, done: make(chan struct{})}
+	r := &wsRelay{local: local, ws: ws, source: source, done: make(chan struct{})}
 	go r.up()
 	go r.down()
 	return r, nil
@@ -72,7 +78,12 @@ func (r *wsRelay) up() {
 			r.fail(err)
 			return
 		}
-		r.peer.Store(&from)
+		if p := r.peer.Load(); p == nil || *p != from {
+			if !r.source(from) {
+				continue
+			}
+			r.peer.Store(&from)
+		}
 		if err := r.ws.Write(context.Background(), websocket.MessageBinary, buf[:n]); err != nil {
 			r.fail(err)
 			return

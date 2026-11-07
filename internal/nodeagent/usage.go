@@ -31,11 +31,13 @@ type usageQueue struct {
 }
 
 type usageData struct {
-	Seq     int64                 `json:"seq"`
-	Acked   int64                 `json:"acked"`
-	LastTo  time.Time             `json:"last_to"`
-	WG      map[string]wgCounters `json:"wg,omitempty"`
-	Pending []nodeproto.Usage     `json:"pending,omitempty"`
+	Seq    int64                 `json:"seq"`
+	Acked  int64                 `json:"acked"`
+	LastTo time.Time             `json:"last_to"`
+	WG     map[string]wgCounters `json:"wg,omitempty"`
+	// Exit holds the last Smart DNS exit totals reported, by site.
+	Exit    map[string]nodeproto.ExitUsage `json:"exit,omitempty"`
+	Pending []nodeproto.Usage              `json:"pending,omitempty"`
 }
 
 type wgCounters struct {
@@ -97,6 +99,7 @@ type collector struct {
 	hosts map[string]observe.Totals
 	wg    []tunnel.Status
 	smart []nodeproto.ServiceUsage
+	exits []nodeproto.ExitStatus
 }
 
 // record turns one interval's inputs into a usage message (nil when there
@@ -136,8 +139,9 @@ func (q *usageQueue) record(c collector, now time.Time) (*nodeproto.Usage, error
 		}
 	}
 	u.Smart = c.smart
+	u.Exit = q.exitDeltas(c.exits)
 	q.d.LastTo = now
-	if len(u.Apps) == 0 && len(u.Sites) == 0 && len(u.Smart) == 0 {
+	if len(u.Apps) == 0 && len(u.Sites) == 0 && len(u.Smart) == 0 && len(u.Exit) == 0 {
 		return nil, q.save()
 	}
 	q.d.Seq++
@@ -147,6 +151,30 @@ func (q *usageQueue) record(c collector, now time.Time) (*nodeproto.Usage, error
 		q.d.Pending = q.d.Pending[n:]
 	}
 	return &u, q.save()
+}
+
+// exitDeltas turns the exit's running totals into use since the last call.
+// The totals start again when the node restarts.
+func (q *usageQueue) exitDeltas(exits []nodeproto.ExitStatus) []nodeproto.ExitUsage {
+	if q.d.Exit == nil {
+		q.d.Exit = map[string]nodeproto.ExitUsage{}
+	}
+	var out []nodeproto.ExitUsage
+	for _, e := range exits {
+		for _, cur := range e.Sites {
+			last := q.d.Exit[cur.Site]
+			q.d.Exit[cur.Site] = cur
+			d := nodeproto.ExitUsage{Site: cur.Site, Bytes: cur.Bytes - last.Bytes, Conns: cur.Conns - last.Conns}
+			if d.Bytes < 0 || d.Conns < 0 {
+				d = cur
+			}
+			if d.Bytes > 0 || d.Conns > 0 {
+				out = append(out, d)
+			}
+		}
+	}
+	slices.SortFunc(out, func(a, b nodeproto.ExitUsage) int { return strings.Compare(a.Site, b.Site) })
+	return out
 }
 
 // appUsage maps per-host totals to apps (hosts that belong to no app, e.g.
@@ -241,6 +269,7 @@ func (a *Agent) collectUsage(send bool) {
 			a.log.Warn("reading connector Smart DNS usage", "err", err)
 		}
 	}
+	c.exits = hookExits()
 	c.cfg, _ = a.loadConfig()
 	if a.o.Logs != nil {
 		c.hosts = a.o.Logs.TakeUsage()

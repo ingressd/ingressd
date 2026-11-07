@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -112,7 +113,7 @@ func TestRelay(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	relay, err := dialRelay(ctx, "ws"+strings.TrimPrefix(ts.URL, "http"), http.DefaultClient, nil)
+	relay, err := dialRelay(ctx, "ws"+strings.TrimPrefix(ts.URL, "http"), http.DefaultClient, nil, func(netip.AddrPort) bool { return true })
 	if err != nil {
 		t.Fatal(err)
 	}

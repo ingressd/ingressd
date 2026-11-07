@@ -68,6 +68,9 @@ type Scanner struct {
 	ExcludeIfaces []string
 	// ExcludePrefixes are never scanned (the tunnel transit network).
 	ExcludePrefixes []netip.Prefix
+	// Within returns the parts of a subnet that may be scanned (default:
+	// all of it).
+	Within func(netip.Prefix) []netip.Prefix
 	// Eligible decides whether an interface address may be scanned
 	// (default: RFC 1918 private IPv4). Tests allow loopback.
 	Eligible func(netip.Addr) bool
@@ -186,11 +189,16 @@ func (s *Scanner) targets() ([]scanTarget, error) {
 					continue prefixes
 				}
 			}
-			if seen[np] {
-				continue
+			parts := []netip.Prefix{np}
+			if s.Within != nil {
+				parts = s.Within(np)
 			}
-			seen[np] = true
-			out = append(out, scanTarget{prefix: np, self: a})
+			for _, part := range parts {
+				if !seen[part] {
+					seen[part] = true
+					out = append(out, scanTarget{prefix: part, self: a})
+				}
+			}
 		}
 	}
 	return out, nil
@@ -389,6 +397,15 @@ func (sc *Scanner) ExcludeTunnel(st *State, mode string) {
 	}
 }
 
+// scanner is the scan an edge may ask for: off the tunnel, and inside the
+// local allowlist.
+func (e *edge) scanner() *Scanner {
+	st := e.s.stateCopy()
+	sc := &Scanner{Within: func(p netip.Prefix) []netip.Prefix { return outermost(st.reach.narrow(p)) }}
+	sc.ExcludeTunnel(st, e.s.mode)
+	return sc
+}
+
 // runDiscovery scans and posts the report to the edge that asked,
 // answering its latest request.
 func (e *edge) runDiscovery(ctx context.Context) {
@@ -396,9 +413,7 @@ func (e *edge) runDiscovery(ctx context.Context) {
 	log := e.s.log
 	rep := proto.DiscoveryReport{Started: time.Now().UTC()}
 	log.Info("LAN discovery requested", "edge", e.label())
-	sc := &Scanner{}
-	sc.ExcludeTunnel(e.s.stateCopy(), e.s.mode)
-	subnets, svcs, err := sc.Scan(ctx)
+	subnets, svcs, err := e.scanner().Scan(ctx)
 	if ctx.Err() != nil {
 		return // link restarting or shutting down; the edge asks again
 	}

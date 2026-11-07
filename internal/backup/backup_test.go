@@ -282,6 +282,28 @@ func TestSchedule(t *testing.T) {
 	}
 }
 
+func TestSchedulerArchiveName(t *testing.T) {
+	confDir, keyPath := setupEdge(t)
+	state := t.TempDir()
+	cfg, err := config.Parse([]byte(testConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Edge.Name = "../lab/one"
+	s := &Scheduler{
+		Config:    func() *config.Config { return cfg },
+		ConfigDir: confDir, KeyPath: keyPath, StateDir: state,
+		Now: func() time.Time { return time.Date(2026, 11, 2, 3, 0, 0, 0, time.UTC) },
+	}
+	st, err := s.RunOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(state, "backups", "ingressd-..-lab-one-20261102T030000Z.tar.gz"); st.LastFile != want {
+		t.Errorf("archive at %s, want %s", st.LastFile, want)
+	}
+}
+
 func TestSchedulerRunOnce(t *testing.T) {
 	confDir, keyPath := setupEdge(t)
 	state := t.TempDir()

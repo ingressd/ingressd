@@ -3,17 +3,22 @@
 package smartdns
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ingressd/ingressd/pkg/config"
+	"github.com/ingressd/ingressd/pkg/nodeproto"
 )
 
 var (
@@ -163,6 +168,134 @@ func relayVia(t *testing.T, s *ExitServer, remote netip.Addr, req ConnectRequest
 		return ConnectResponse{}, err
 	}
 	return ReadConnectResponse(a)
+}
+
+func TestExitServerRelayStaysOffTheNode(t *testing.T) {
+	s := newTestExitServer(t, "127.0.0.1:9")
+	req := ConnectRequest{Exit: "nl", Host: "tv.stream.example", Port: 443, Addrs: addrs("192.0.2.20", "198.51.100.7")}
+	resp, err := relayVia(t, s, siteAddr, req)
+	if err != nil || resp.OK || resp.ExitDown || !strings.Contains(resp.Error, "this node") {
+		t.Errorf("%+v, %v", resp, err)
+	}
+	own := nodeAddrs(s.state().egress)
+	if !own(netip.MustParseAddr("198.51.100.7")) || !own(netip.MustParseAddr("::ffff:198.51.100.7")) || own(netip.MustParseAddr("192.0.2.20")) {
+		t.Error("own address test")
+	}
+}
+
+func TestExitServerUsage(t *testing.T) {
+	up, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer up.Close()
+	go func() {
+		for {
+			c, err := up.Accept()
+			if err != nil {
+				return
+			}
+			go func() { defer c.Close(); _, _ = io.Copy(c, c) }()
+		}
+	}()
+	port := up.Addr().(*net.TCPAddr).Port
+	s := NewExitServer(ExitServerOptions{TraceURL: "http://127.0.0.1:1/", Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	}})
+	s.Reconfigure(&config.Config{
+		Edge:     config.Edge{PublicIPv4: "198.51.100.7"},
+		Tunnels:  map[string]config.Tunnel{"site1": {Transit: "10.100.1.0/30"}},
+		SmartDNS: &config.SmartDNS{Exit: &config.SmartDNSNodeExit{Country: "NL", Sites: []string{"site1"}, Upstream: []string{"127.0.0.1:9"}}},
+	})
+	t.Cleanup(s.listeners.closeAll)
+
+	a, b := net.Pipe()
+	defer a.Close()
+	local := net.TCPAddrFromAddrPort(netip.AddrPortFrom(siteEdge, 51902))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.handleRelay(addrConn{b, local, net.TCPAddrFromAddrPort(netip.AddrPortFrom(siteAddr, 40000))})
+	}()
+	_ = a.SetDeadline(time.Now().Add(3 * time.Second))
+	if err := WriteConnectRequest(a, ConnectRequest{Exit: "nl", Host: "tv.stream.example", Port: 443, Addrs: addrs("192.0.2.20")}); err != nil {
+		t.Fatal(err)
+	}
+	if resp, err := ReadConnectResponse(a); err != nil || !resp.OK {
+		t.Fatalf("%+v, %v", resp, err)
+	}
+	if u := s.Snapshot().Usage["site1"]; u.Conns != 1 || u.Active != 1 {
+		t.Errorf("open %+v", u)
+	}
+	if _, err := a.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(a, buf); err != nil {
+		t.Fatal(err)
+	}
+	_ = a.Close()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("relay did not finish")
+	}
+	if u := s.Snapshot().Usage["site1"]; u.Conns != 1 || u.Active != 0 || u.Bytes != 8 {
+		t.Errorf("closed %+v", u)
+	}
+
+	// Past the cap a site is refused, and the stream is not counted as open.
+	s.usageFor("site1").active.Store(maxSiteStreams)
+	resp, err := relayVia(t, s, siteAddr, ConnectRequest{Exit: "nl", Host: "tv.stream.example", Port: 443, Addrs: addrs("192.0.2.20")})
+	if err != nil || resp.OK || resp.ExitDown || !strings.Contains(resp.Error, "too many") {
+		t.Errorf("%+v, %v", resp, err)
+	}
+}
+
+func TestExitServerUsageAlert(t *testing.T) {
+	var out bytes.Buffer
+	s := NewExitServer(ExitServerOptions{Log: slog.New(slog.NewTextHandler(&out, nil))})
+	now := time.Now()
+	u := s.usageFor("site1")
+	u.bytes.Store(1 << 40)
+	s.checkUsage(now) // the window starts here, whatever came before
+	u.bytes.Add(exitAlertBytes)
+	s.checkUsage(now.Add(time.Hour))
+	if out.Len() != 0 {
+		t.Fatalf("at the limit: %s", out.String())
+	}
+	u.bytes.Add(1)
+	s.checkUsage(now.Add(2 * time.Hour))
+	s.checkUsage(now.Add(3 * time.Hour))
+	if got := strings.Count(out.String(), "over the daily exit usage limit"); got != 1 {
+		t.Fatalf("%d alerts: %s", got, out.String())
+	}
+	if !strings.Contains(out.String(), "site=site1") {
+		t.Error(out.String())
+	}
+
+	// A new day starts over; so do connections count on their own.
+	s.checkUsage(now.Add(exitAlertWindow))
+	u.conns.Add(exitAlertConns + 1)
+	s.checkUsage(now.Add(exitAlertWindow + time.Hour))
+	if got := strings.Count(out.String(), "over the daily exit usage limit"); got != 2 {
+		t.Errorf("%d alerts: %s", got, out.String())
+	}
+}
+
+func TestExitsCarrySiteUsage(t *testing.T) {
+	s := newTestExitServer(t, "127.0.0.1:9")
+	u := s.usageFor("site1")
+	u.bytes.Store(8)
+	u.conns.Store(1)
+	e := s.Exits()
+	if len(e) != 1 || len(e[0].Sites) != 1 || e[0].Sites[0] != (nodeproto.ExitUsage{Site: "site1", Bytes: 8, Conns: 1}) {
+		t.Fatalf("%+v", e)
+	}
+	b, err := json.Marshal(e[0])
+	if err != nil || strings.Contains(string(b), "site1") {
+		t.Errorf("%s, %v", b, err)
+	}
 }
 
 func TestExitServerRelayRefusals(t *testing.T) {

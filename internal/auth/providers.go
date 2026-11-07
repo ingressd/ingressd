@@ -117,6 +117,9 @@ func (s *Service) serveOAuthStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cross-site request rejected", http.StatusForbidden)
 		return
 	}
+	if !parseForm(w, r) {
+		return
+	}
 	method := r.PostFormValue("provider")
 	app, rd, nonce := r.PostFormValue("app"), r.PostFormValue("rd"), r.PostFormValue("n")
 	var t *target

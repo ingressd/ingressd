@@ -258,6 +258,9 @@ type ExitStatus struct {
 	// after resolving the config's host name), additive.
 	Endpoint string `json:"endpoint,omitempty"`
 	Message  string `json:"message,omitempty"`
+	// Sites is each site's use of this exit since the exit started, for the
+	// node's own usage reports (see Usage.Exit). Not sent as status.
+	Sites []ExitUsage `json:"-"`
 }
 
 // ServiceStatus is a smart DNS service's exit choice on one home node.
@@ -289,6 +292,8 @@ type Usage struct {
 	Apps  []AppUsage     `json:"apps,omitempty"`
 	Sites []SiteUsage    `json:"sites,omitempty"`
 	Smart []ServiceUsage `json:"smartdns,omitempty"`
+	// Exit is each site's use of this node's Smart DNS exit (additive).
+	Exit []ExitUsage `json:"exit,omitempty"`
 }
 
 type AppUsage struct {
@@ -314,6 +319,14 @@ type ServiceUsage struct {
 	Service string `json:"service"`
 	Bytes   int64  `json:"bytes"`
 	Conns   int64  `json:"connections"`
+}
+
+// ExitUsage is one site's use of a node exit: bytes relayed in both
+// directions and connections opened.
+type ExitUsage struct {
+	Site  string `json:"site"`
+	Bytes int64  `json:"bytes"`
+	Conns int64  `json:"connections"`
 }
 
 type LogBatch struct {

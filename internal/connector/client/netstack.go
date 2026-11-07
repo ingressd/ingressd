@@ -263,6 +263,9 @@ func (t *netstackTUN) target(id stack.TransportEndpointID) (string, bool) {
 		return "", false
 	}
 	a = a.Unmap()
+	if hostOnly(a) {
+		return "", false
+	}
 	for _, p := range t.allowed {
 		if p.Contains(a) {
 			return net.JoinHostPort(a.String(), strconv.Itoa(int(id.LocalPort))), true

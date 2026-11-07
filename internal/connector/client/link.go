@@ -53,6 +53,8 @@ type link interface {
 	MTU() int
 	// DialTunnel opens a TCP connection to addr through the tunnel.
 	DialTunnel(ctx context.Context, addr string) (net.Conn, error)
+	// ListenPort is the UDP port WireGuard sends from (0 = not known).
+	ListenPort() (int, error)
 	Kind() string
 	Close() error
 }
@@ -180,6 +182,19 @@ func (l *userLink) SetMTU(mtu int) error {
 	return nil
 }
 
+func (l *userLink) ListenPort() (int, error) {
+	s, err := l.dev.IpcGet()
+	if err != nil {
+		return 0, err
+	}
+	for line := range strings.Lines(s) {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "listen_port="); ok {
+			return strconv.Atoi(v)
+		}
+	}
+	return 0, nil
+}
+
 func (l *userLink) MTU() int     { return l.mtu }
 func (l *userLink) Kind() string { return l.kind }
 
@@ -197,14 +212,7 @@ func (l *userLink) Close() error {
 
 // openNetstack brings up wireguard-go on a gVisor netstack (no root).
 func openNetstack(st *State, priv wgtypes.Key, log *slog.Logger) (link, error) {
-	var allowed []netip.Prefix
-	for _, s := range st.Subnets() {
-		p, err := netip.ParsePrefix(s)
-		if err != nil {
-			return nil, fmt.Errorf("config subnet %q: %w", s, err)
-		}
-		allowed = append(allowed, p)
-	}
+	allowed := st.allowedSubnets()
 	addrs := st.Addresses()
 	if len(addrs) == 0 {
 		return nil, fmt.Errorf("no site transit address in the tunnel config")

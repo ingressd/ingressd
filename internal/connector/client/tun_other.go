@@ -22,3 +22,5 @@ func openTUN(*State, wgtypes.Key, *slog.Logger) (link, error) {
 func probeMTU(l link, _ netip.Addr, _ *slog.Logger) int { return l.MTU() }
 
 func reapplyNFT(*State, int, *slog.Logger) {}
+
+func hostRoutes(string) []netip.Prefix { return nil }

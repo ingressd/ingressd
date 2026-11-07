@@ -19,7 +19,7 @@ type botRule struct {
 }
 
 var goodBots = []botRule{
-	{"googlebot", []string{".googlebot.com", ".google.com", ".googleusercontent.com"}},
+	{"googlebot", []string{".googlebot.com", ".google.com"}},
 	{"google-inspectiontool", []string{".googlebot.com", ".google.com"}},
 	{"bingbot", []string{".search.msn.com"}},
 }

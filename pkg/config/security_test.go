@@ -112,3 +112,11 @@ func TestValidateEdgeSecurity(t *testing.T) {
 		}
 	}
 }
+
+func TestLargeStoredRateLimitStaysValid(t *testing.T) {
+	v := &validator{}
+	validateRateLimit(v, "r", RateLimitRule{Match: "/x", Requests: 2_000_000_000, Per: Duration(time.Minute), Key: "ip", Action: RateLimitBlock})
+	if len(v.errs) > 0 {
+		t.Fatal(v.errs)
+	}
+}

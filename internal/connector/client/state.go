@@ -59,6 +59,14 @@ type State struct {
 	SmartDNSConfig json.RawMessage `json:"smartdns_config,omitempty"`
 	// RescueIssued is the newest edge list accepted from the panel (rescue.go).
 	RescueIssued time.Time `json:"rescue_issued,omitempty"`
+	// AllowlistPinned is set once the allowlist exists (allowlist.go): from
+	// then on a missing file is a fault, not a first start.
+	AllowlistPinned bool `json:"allowlist_pinned,omitempty"`
+
+	// reach is the allowlist in effect for this run.
+	reach *localReach
+	// routes lists the host's routes (TUN mode; nil elsewhere).
+	routes func() []netip.Prefix
 }
 
 // EdgeState is one edge (node) of the site.
@@ -123,7 +131,7 @@ func (s *State) Edge(key string) *EdgeState {
 func (s *State) Addresses() []netip.Prefix {
 	var out []netip.Prefix
 	for _, e := range s.Edges {
-		if p, err := netip.ParsePrefix(e.Config.Address); err == nil && !slices.Contains(out, p) {
+		if p, ok := transitPrefix(e.Config.Address); ok && !slices.Contains(out, p) {
 			out = append(out, p)
 		}
 	}

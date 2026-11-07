@@ -6,6 +6,7 @@
     "http": {
       "servers": {
         "edge": {
+          "allow_0rtt": false,
           "listen": [
             ":443"
           ],
@@ -30,6 +31,34 @@
                 }
               ],
               "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "headers",
+                  "request": {
+                    "delete": [
+                      "Upgrade"
+                    ]
+                  }
+                }
+              ],
+              "match": [
+                {
+                  "header": {
+                    "Upgrade": []
+                  },
+                  "not": [
+                    {
+                      "vars_regexp": {
+                        "{http.request.header.Upgrade}": {
+                          "pattern": "(?i)^\\s*(websocket|spdy/3\\.1|tcp)\\s*$"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
             },
             {
               "handle": [

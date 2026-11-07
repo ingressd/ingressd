@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -38,6 +39,11 @@ type EnrollOptions struct {
 	Masquerade  bool
 	// OrgKey is pinned for the signed Smart DNS config (from the join string).
 	OrgKey string
+	// Allow, when not nil, is the allowlist to start with, in place of
+	// pinning the networks in the tunnel config. AllowAnyNetwork lets it
+	// hold 0.0.0.0/0 or ::/0.
+	Allow           []string
+	AllowAnyNetwork bool
 }
 
 // Enroll generates the site keypair locally, exchanges the one-time token
@@ -46,6 +52,17 @@ type EnrollOptions struct {
 func Enroll(ctx context.Context, statePath string, o EnrollOptions) (*State, error) {
 	if o.Mode != ModeTUN && o.Mode != ModeNetstack {
 		return nil, fmt.Errorf("mode must be tun or netstack, got %q", o.Mode)
+	}
+	// Before the one-time token is spent.
+	allow, err := parseNetworks(o.Allow, o.AllowAnyNetwork)
+	if err != nil {
+		return nil, err
+	}
+	if runtime.GOOS == "windows" {
+		// %ProgramData% lets any user create the directory first.
+		if err := SecureStateDir(statePath); err != nil {
+			return nil, fmt.Errorf("state directory: %w", err)
+		}
 	}
 	key, err := wgtypes.GeneratePrivateKey()
 	if err != nil {
@@ -82,6 +99,12 @@ func Enroll(ctx context.Context, statePath string, o EnrollOptions) (*State, err
 			EnrolledAt:  time.Now().UTC(),
 			Edges:       []EdgeState{es},
 		}
+		// When this fails the first start pins instead.
+		a, source := pinnedAllowlist(st), allowFromPin
+		if o.Allow != nil {
+			a, source = &Allowlist{Networks: allow, AnyNetwork: o.AllowAnyNetwork}, allowFromEnroll
+		}
+		st.AllowlistPinned = a.save(statePath, source) == nil
 		return st, st.Save(statePath)
 	}
 	return nil, errors.Join(errs...)
@@ -118,7 +141,7 @@ func enrollWith(ctx context.Context, es EdgeState, token string, key wgtypes.Key
 		return nil, fmt.Errorf("enroll: %s: %s", resp.Status, strings.TrimSpace(string(msg)))
 	}
 	var er proto.EnrollResponse
-	if err := json.NewDecoder(resp.Body).Decode(&er); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxConfigBody)).Decode(&er); err != nil {
 		return nil, fmt.Errorf("enroll: bad response: %w", err)
 	}
 	return &er, nil

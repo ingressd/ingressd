@@ -49,3 +49,15 @@ func TestCacheAndFallbackChain(t *testing.T) {
 		t.Error(`"api" appears outside the global cache app`)
 	}
 }
+
+func TestCacheSkipsIdentifiedRequests(t *testing.T) {
+	s := string(renderTest(t).Caddy)
+	for _, h := range identityHeaders {
+		if !strings.Contains(s, `"`+h+`": []`) {
+			t.Errorf("cache bypass does not cover %s", h)
+		}
+	}
+	if !strings.Contains(s, `"disable_coalescing": true`) {
+		t.Error("request coalescing left on")
+	}
+}

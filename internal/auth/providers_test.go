@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	guildA = "100000000000000001"
-	roleA  = "200000000000000001"
-	steamA = "76561198000000001"
+	guildA  = "100000000000000001"
+	roleA   = "200000000000000001"
+	steamA  = "76561198000000001"
+	tenantA = "11111111-2222-3333-4444-555555555555"
 )
 
 const providerConfig = `
@@ -47,6 +48,17 @@ policies:
   staff:
     action: allow
     include: [{ email_domain: [corp.example] }]
+  no-guest-role:
+    action: deny
+    include: [{ microsoft_role: [Guest] }]
+  staff-but-guests:
+    action: allow
+    include: [{ email_domain: [corp.example] }]
+    exclude: [{ microsoft_role: [Guest] }]
+  tenant-admins:
+    action: allow
+    include: [{ microsoft_role: [Admin] }]
+    require: [{ microsoft_tenant: ["` + tenantA + `"] }]
 apps:
   web:
     hosts: [web.example.com]
@@ -57,6 +69,21 @@ apps:
     hosts: [mail.example.com]
     origin: http://192.0.2.11:80
     access: [staff]
+  denied:
+    hosts: [denied.example.com]
+    origin: http://192.0.2.12:80
+    access: [no-guest-role, staff]
+    login_methods: [microsoft]
+  excluded:
+    hosts: [excluded.example.com]
+    origin: http://192.0.2.13:80
+    access: [staff-but-guests]
+    login_methods: [microsoft]
+  admin:
+    hosts: [admin.example.com]
+    origin: http://192.0.2.14:80
+    access: [tenant-admins]
+    login_methods: [microsoft]
 `
 
 func newProviderPortal(t *testing.T) (*portalEnv, *idptest.Server) {
@@ -217,6 +244,44 @@ func TestProviderSignInGoogleAndMicrosoft(t *testing.T) {
 	pc, _ := p.keys.OpenPortal(cookieFrom(w, PortalCookieName).Value)
 	if d := pc.Expires.Sub(pc.Issued); d > 61*60e9 {
 		t.Errorf("provider session not capped: %v", d)
+	}
+}
+
+// The provider here is open to many tenants, so its roles are unbound.
+func TestProviderSignInMicrosoftRoles(t *testing.T) {
+	p, f := newProviderPortal(t)
+	user := func(role string) idptest.User {
+		return idptest.User{Sub: "s", OID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", TID: tenantA, Email: "joe@corp.example", Edov: true, Roles: []string{role}}
+	}
+	f.SetUser("microsoft", user("Guest"))
+	for _, app := range []string{"denied", "excluded"} {
+		if w := p.providerSignIn("microsoft", app, "https://"+app+".example.com/"); w.Code != http.StatusForbidden {
+			t.Errorf("%s: %d %s", app, w.Code, w.Body)
+		}
+	}
+	f.SetUser("microsoft", user("Other"))
+	if w := p.providerSignIn("microsoft", "denied", "https://denied.example.com/"); w.Code != http.StatusFound {
+		t.Errorf("no role: %d %s", w.Code, w.Body)
+	}
+
+	// The role survives the session, the code and the exchange.
+	f.SetUser("microsoft", user("Admin"))
+	w := p.providerSignIn("microsoft", "admin", "https://admin.example.com/")
+	if w.Code != http.StatusFound {
+		t.Fatalf("admin: %d %s", w.Code, w.Body)
+	}
+	pc, err := p.keys.OpenPortal(cookieFrom(w, PortalCookieName).Value)
+	if err != nil || !slices.Contains(pc.Attrs, config.Attr(config.AttrMicrosoftRoleUnbound, "Admin")) {
+		t.Fatalf("portal claims %+v %v", pc, err)
+	}
+	u, _ := url.Parse(w.Header().Get("Location"))
+	ew, er := p.exchange(u.Query().Get("code"), "admin", "admin.example.com")
+	if ew.Code != http.StatusOK {
+		t.Fatalf("exchange: %d %s", ew.Code, ew.Body)
+	}
+	ac, err := p.keys.OpenApp("admin", er.Token)
+	if err != nil || ac.Grants["tenant-admins"] == "" || !slices.Contains(ac.Attrs, config.Attr(config.AttrMicrosoftRoleUnbound, "Admin")) {
+		t.Fatalf("app claims %+v %v", ac, err)
 	}
 }
 

@@ -84,7 +84,7 @@ jobs:
             echo "::error::$VERSION is a pre-release; only staging accepts pre-releases"; exit 1
           fi
           mkdir -p release
-          gh release download "$VERSION" --dir release -p SHA256SUMS -p 'ingressd_linux_*' -p 'ingressd-edge_linux_*'
+          gh release download "$VERSION" --dir release -p SHA256SUMS -p SHA256SUMS.minisig -p 'ingressd_linux_*' -p 'ingressd-edge_linux_*'
           (cd release && sha256sum -c --ignore-missing SHA256SUMS)
 
       - name: Roll out

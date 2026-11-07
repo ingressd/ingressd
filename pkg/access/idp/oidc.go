@@ -356,8 +356,14 @@ func (p *Provider) oidcFinish(ctx context.Context, redirectURI string, f Flow, c
 		for _, g := range c.Groups {
 			id.Attrs = append(id.Attrs, config.Attr("microsoft_group", g))
 		}
+		// A role value only has meaning inside the directory that assigned
+		// it, so it counts only when the provider is limited to one tenant.
+		kind := config.AttrMicrosoftRoleUnbound
+		if config.MicrosoftSingleTenant(strings.ToLower(p.Tenant)) {
+			kind = "microsoft_role"
+		}
 		for _, r := range c.Roles {
-			id.Attrs = append(id.Attrs, config.Attr("microsoft_role", r))
+			id.Attrs = append(id.Attrs, config.Attr(kind, r))
 		}
 		if id.Name == "" {
 			id.Name = c.PreferredUsername
