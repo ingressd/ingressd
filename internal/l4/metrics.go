@@ -50,7 +50,7 @@ func ReadPeers(ctx context.Context, service string) ([]Peer, error) {
 // nftJSON runs nft with JSON output. A table or set that does not exist
 // yet is no output rather than an error.
 func nftJSON(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "nft", append([]string{"-j"}, args...)...)
+	cmd := exec.CommandContext(ctx, "nft", append([]string{"-j"}, args...)...) //nolint:gosec // no shell; args name a validated service
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
