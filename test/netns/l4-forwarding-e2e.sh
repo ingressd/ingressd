@@ -67,6 +67,16 @@ EOF
 PUB=198.51.100.1
 call() { in_client python3 "$TMP/client.py" "$@"; }
 
+# counted.py <service id>: reads `nft -j list counters` on stdin and prints
+# "counted" when the service saw bytes both ways and a new connection.
+cat >"$TMP/counted.py" <<'EOF'
+import json, sys
+c = {e["counter"]["name"]: e["counter"] for e in json.load(sys.stdin)["nftables"] if "counter" in e}
+svc = sys.argv[1]
+print("counted" if c[svc + "_in"]["bytes"] and c[svc + "_out"]["bytes"] and c[svc + "_conns"]["packets"] else c)
+EOF
+counted() { in_edge nft -j list counters table ip ingressd_l4 | python3 "$TMP/counted.py" "$1"; }
+
 write_config() { # write_config <virtual_prefix line or "">
 	mkdir -p "$TMP/conf"
 	cat >"$TMP/conf/config.yaml" <<EOF
@@ -144,6 +154,12 @@ suite() { # suite <label> <virtual_prefix line or "">
 
 	# PROXY protocol v2 through caddy-l4: header carries the client IP.
 	expect "$L: PROXY v2 header has client IP" "pp2 src=198.51.100.2 peer=10.100.1.1" call tcp $PUB 7003
+
+	# Both engines count their traffic and record who connected.
+	expect "$L: kernel service counted" "counted" counted svc_echo
+	expect "$L: caddy-l4 service counted" "counted" counted svc_mc
+	expect "$L: kernel connection in the live set" "198.51.100.2" in_edge nft list set ip ingressd_l4 svc_echo_live
+	expect "$L: caddy-l4 connection in the live set" "198.51.100.2" in_edge nft list set ip ingressd_l4 svc_mc_live
 
 	# Transparent mode: site accepts any source from the edge and routes the
 	# game host's replies back through the tunnel (UniFi policy route).

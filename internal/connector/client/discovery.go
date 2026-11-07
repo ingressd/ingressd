@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ingressd/ingressd/internal/connector/proto"
+	"github.com/ingressd/ingressd/pkg/portcatalog"
 )
 
 // LAN service discovery: on request from the edge, the connector scans the
@@ -30,10 +31,13 @@ import (
 // of concurrent probes.
 
 // DefaultDiscoveryPorts are the TCP ports probed on every host.
-var DefaultDiscoveryPorts = []int{80, 443, 3000, 5000, 5001, 8000, 8006, 8080, 8081, 8123, 8443, 8888, 9000, 9090, 32400}
+//
+// A scan has to finish within defaultScanTimeout at defaultProbeRate:
+// TestDefaultPortsFitScan keeps the catalogue to what a /22 allows.
+var DefaultDiscoveryPorts = portcatalog.LANPorts()
 
 // tlsFirstPorts are tried with HTTPS before plain HTTP.
-var tlsFirstPorts = map[int]bool{443: true, 5001: true, 8006: true, 8443: true, 9443: true}
+var tlsFirstPorts = portcatalog.TLSPorts()
 
 // Discovery limits.
 const (

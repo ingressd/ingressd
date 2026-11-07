@@ -31,6 +31,8 @@ import (
 const (
 	checkEdge   = "edge proxy reachable"
 	checkConfig = "config valid"
+	// tunnelCheck prefixes the check of each tunnel.
+	tunnelCheck = "tunnel "
 )
 
 // minFreeDisk below which status warns.
@@ -85,7 +87,7 @@ func (a *Agent) buildStatus(ctx context.Context) nodeproto.Status {
 	if cfg != nil && cerr == nil {
 		st.Tunnels = a.tunnelStatus(cfg, now)
 		for _, t := range st.Tunnels {
-			add("tunnel "+t.Site, boolErr(t.Up, "no handshake in the last "+tunnel.HandshakeTimeout.String()+" (is the site connected?)"), true)
+			add(tunnelCheck+t.Site, boolErr(t.Up, "no handshake in the last "+tunnel.HandshakeTimeout.String()+" (is the site connected?)"), true)
 		}
 		st.Certs = a.certStatus(cfg, now)
 	}
@@ -107,15 +109,29 @@ func boolErr(ok bool, msg string) error {
 }
 
 // health: down when the edge cannot serve, degraded on any other problem.
+// A tunnel down while others are up is its origin's problem, shown on the
+// origin. Only several tunnels all down at once point at the node itself.
 func health(checks []nodeproto.Check) string {
 	h := nodeproto.HealthOK
+	var tunnelsUp, tunnelsDown int
 	for _, c := range checks {
+		if strings.HasPrefix(c.Name, tunnelCheck) {
+			if c.OK {
+				tunnelsUp++
+			} else {
+				tunnelsDown++
+			}
+			continue
+		}
 		if c.OK {
 			continue
 		}
 		if !c.Warn && (c.Name == checkEdge || c.Name == checkConfig) {
 			return nodeproto.HealthDown
 		}
+		h = nodeproto.HealthDegraded
+	}
+	if tunnelsUp == 0 && tunnelsDown > 1 {
 		h = nodeproto.HealthDegraded
 	}
 	return h

@@ -5,11 +5,14 @@ package nodeagent
 import (
 	"context"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ingressd/ingressd/internal/l4"
 	"github.com/ingressd/ingressd/internal/observe"
+	"github.com/ingressd/ingressd/pkg/config"
 	"github.com/ingressd/ingressd/pkg/nodeproto"
 )
 
@@ -20,7 +23,13 @@ const (
 	liveMaxDuration = time.Hour
 	liveBatchEvery  = 500 * time.Millisecond
 	liveBatchMax    = 100
+	// livePeerEvery is how often game services are polled for connections;
+	// their set keeps a connection for 30 s.
+	livePeerEvery = 2 * time.Second
 )
+
+// readL4Peers is overridable in tests.
+var readL4Peers = l4.ReadPeers
 
 // liveSet holds one connection's live subscriptions.
 type liveSet struct {
@@ -91,9 +100,48 @@ func (f liveFilter) match(host string) (app string, ok bool) {
 	return app, app != "" && f.apps[app]
 }
 
-// streamLive forwards matching access-log entries as log batches until ctx
-// ends, sending at most MaxPerSecond entries per second and counting the
-// rest as dropped.
+// l4Services lists the game services a subscription wants. They have no
+// host, so a host filter leaves them out unless the app is asked for.
+func (f liveFilter) l4Services(cfg *config.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	var out []string
+	for name := range cfg.L4 {
+		if f.apps[name] || (len(f.hosts) == 0 && len(f.apps) == 0) {
+			out = append(out, name)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// l4Connections returns the connections to services that are not in seen, as
+// live entries, and updates seen. A service that cannot be read keeps what
+// was seen of it, so its connections are not reported twice.
+func l4Connections(ctx context.Context, services []string, seen map[string]map[l4.Peer]bool, now time.Time) []nodeproto.LogEntry {
+	var out []nodeproto.LogEntry
+	for _, name := range services {
+		peers, err := readL4Peers(ctx, name)
+		if err != nil {
+			continue
+		}
+		current := make(map[l4.Peer]bool, len(peers))
+		for _, p := range peers {
+			current[p] = true
+			if !seen[name][p] {
+				out = append(out, nodeproto.LogEntry{Time: now.UTC(), App: name, Host: name, Method: strings.ToUpper(p.Proto),
+					ClientIP: p.IP, Decision: nodeproto.DecisionAllow})
+			}
+		}
+		seen[name] = current
+	}
+	return out
+}
+
+// streamLive forwards matching access-log entries and game connections as
+// log batches until ctx ends, sending at most MaxPerSecond entries per
+// second and counting the rest as dropped.
 func (a *Agent) streamLive(ctx context.Context, s *session, sub nodeproto.LiveSubscribe) {
 	f := liveFilter{hosts: map[string]bool{}, apps: map[string]bool{}}
 	for _, h := range sub.Hosts {
@@ -102,8 +150,10 @@ func (a *Agent) streamLive(ctx context.Context, s *session, sub nodeproto.LiveSu
 	for _, ap := range sub.Apps {
 		f.apps[ap] = true
 	}
+	var services []string
 	if cfg, err := a.loadConfig(); err == nil {
 		f.idx = newHostIndex(cfg)
+		services = f.l4Services(cfg)
 	} else {
 		f.idx = hostIndex{}
 	}
@@ -128,12 +178,37 @@ func (a *Agent) streamLive(ctx context.Context, s *session, sub nodeproto.LiveSu
 		batch, dropped = nil, 0
 	}
 	defer flush()
+	add := func(le nodeproto.LogEntry) {
+		if now := time.Now(); now.Sub(window) >= time.Second {
+			window, inWindow = now, 0
+		}
+		if inWindow >= rate {
+			dropped++
+			return
+		}
+		inWindow++
+		batch = append(batch, le)
+		if len(batch) >= liveBatchMax {
+			flush()
+		}
+	}
+	var peers <-chan time.Time // nil without game services: never fires
+	if len(services) > 0 {
+		t := time.NewTicker(livePeerEvery)
+		defer t.Stop()
+		peers = t.C
+	}
+	seen := map[string]map[l4.Peer]bool{}
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
 			flush()
+		case <-peers:
+			for _, le := range l4Connections(ctx, services, seen, time.Now()) {
+				add(le)
+			}
 		case e, ok := <-entries:
 			if !ok {
 				return
@@ -142,18 +217,7 @@ func (a *Agent) streamLive(ctx context.Context, s *session, sub nodeproto.LiveSu
 			if !match {
 				continue
 			}
-			if now := time.Now(); now.Sub(window) >= time.Second {
-				window, inWindow = now, 0
-			}
-			if inWindow >= rate {
-				dropped++
-				continue
-			}
-			inWindow++
-			batch = append(batch, logEntry(e, app))
-			if len(batch) >= liveBatchMax {
-				flush()
-			}
+			add(logEntry(e, app))
 		}
 	}
 }

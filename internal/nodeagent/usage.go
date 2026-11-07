@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ingressd/ingressd/internal/l4"
 	"github.com/ingressd/ingressd/internal/observe"
 	"github.com/ingressd/ingressd/internal/tunnel"
 	"github.com/ingressd/ingressd/pkg/config"
@@ -21,6 +23,9 @@ import (
 
 // maxPendingUsage caps unacknowledged usage messages (a week at 60 s).
 const maxPendingUsage = 7 * 24 * 60
+
+// readL4Counters is overridable in tests.
+var readL4Counters = l4.ReadCounters
 
 // usageQueue is the persisted usage state: the last seq, the WireGuard
 // counter baselines, and every message the panel has not acknowledged.
@@ -36,8 +41,10 @@ type usageData struct {
 	LastTo time.Time             `json:"last_to"`
 	WG     map[string]wgCounters `json:"wg,omitempty"`
 	// Exit holds the last Smart DNS exit totals reported, by site.
-	Exit    map[string]nodeproto.ExitUsage `json:"exit,omitempty"`
-	Pending []nodeproto.Usage              `json:"pending,omitempty"`
+	Exit map[string]nodeproto.ExitUsage `json:"exit,omitempty"`
+	// L4 holds the last game service totals read, by service.
+	L4      map[string]l4.Counters `json:"l4,omitempty"`
+	Pending []nodeproto.Usage      `json:"pending,omitempty"`
 }
 
 type wgCounters struct {
@@ -100,6 +107,8 @@ type collector struct {
 	wg    []tunnel.Status
 	smart []nodeproto.ServiceUsage
 	exits []nodeproto.ExitStatus
+	// l4 is nil when the game service totals could not be read.
+	l4 map[string]l4.Counters
 }
 
 // record turns one interval's inputs into a usage message (nil when there
@@ -115,6 +124,7 @@ func (q *usageQueue) record(c collector, now time.Time) (*nodeproto.Usage, error
 	if c.cfg != nil {
 		u.Apps = appUsage(c.cfg, c.hosts)
 	}
+	u.Apps = append(u.Apps, q.l4Deltas(c.l4)...)
 	if q.d.WG == nil {
 		q.d.WG = map[string]wgCounters{}
 	}
@@ -151,6 +161,30 @@ func (q *usageQueue) record(c collector, now time.Time) (*nodeproto.Usage, error
 		q.d.Pending = q.d.Pending[n:]
 	}
 	return &u, q.save()
+}
+
+// l4Deltas turns game service totals into use since the last call, as app
+// usage: a service is an app, and its connections count as requests. An
+// apply recreates the counters, so a total below the last one starts again
+// from zero. Traffic between the last read and that apply is not counted.
+func (q *usageQueue) l4Deltas(cur map[string]l4.Counters) []nodeproto.AppUsage {
+	if cur == nil {
+		return nil
+	}
+	var out []nodeproto.AppUsage
+	for name, c := range cur {
+		last := q.d.L4[name]
+		d := l4.Counters{BytesIn: c.BytesIn - last.BytesIn, BytesOut: c.BytesOut - last.BytesOut, Conns: c.Conns - last.Conns}
+		if d.BytesIn < 0 || d.BytesOut < 0 || d.Conns < 0 {
+			d = c
+		}
+		if d != (l4.Counters{}) {
+			out = append(out, nodeproto.AppUsage{App: name, Requests: d.Conns, BytesIn: d.BytesIn, BytesOut: d.BytesOut})
+		}
+	}
+	q.d.L4 = cur
+	slices.SortFunc(out, func(a, b nodeproto.AppUsage) int { return strings.Compare(a.App, b.App) })
+	return out
 }
 
 // exitDeltas turns the exit's running totals into use since the last call.
@@ -276,6 +310,14 @@ func (a *Agent) collectUsage(send bool) {
 	}
 	if c.cfg != nil && len(c.cfg.Tunnels) > 0 {
 		c.wg, _ = tunnel.ReadStatus(c.cfg)
+	}
+	if c.cfg != nil && len(c.cfg.L4) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var err error
+		if c.l4, err = readL4Counters(ctx, slices.Sorted(maps.Keys(c.cfg.L4))); err != nil {
+			a.log.Warn("reading game service counters", "err", err)
+		}
 	}
 	u, err := a.usage.record(c, time.Now())
 	if err != nil {
