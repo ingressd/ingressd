@@ -318,7 +318,7 @@ func TestPortalFormLimits(t *testing.T) {
 	mw := multipart.NewWriter(&body)
 	_ = mw.WriteField("step", "email")
 	_ = mw.WriteField("email", "bob@outlook.com")
-	mw.Close()
+	_ = mw.Close()
 	r := httptest.NewRequest("POST", "https://auth.example.com/login", &body)
 	r.Header.Set("Content-Type", mw.FormDataContentType())
 	r.Header.Set("Origin", "https://auth.example.com")

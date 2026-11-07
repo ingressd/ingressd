@@ -15,7 +15,7 @@ func TestMigrateStateIntoExistingDirectory(t *testing.T) {
 	root := t.TempDir()
 	oldDir, newDir := filepath.Join(root, legacyServiceName), filepath.Join(root, ServiceName)
 	for _, d := range []string{oldDir, newDir} {
-		if err := os.Mkdir(d, 0o755); err != nil {
+		if err := os.Mkdir(d, 0o755); err != nil { //nolint:gosec // mirrors the legacy directory mode
 			t.Fatal(err)
 		}
 	}

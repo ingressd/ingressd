@@ -234,7 +234,7 @@ func TestExitServerUsage(t *testing.T) {
 	if _, err := io.ReadFull(a, buf); err != nil {
 		t.Fatal(err)
 	}
-	a.Close()
+	_ = a.Close()
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):

@@ -35,7 +35,7 @@ func dialRelay(ctx context.Context, url string, hc *http.Client, header http.Hea
 	ws, resp, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPClient: hc, HTTPHeader: header})
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusUnauthorized {
-			return nil, fmt.Errorf("%w: %v", errRelayUnauthorized, err)
+			return nil, fmt.Errorf("%w: %w", errRelayUnauthorized, err)
 		}
 		return nil, err
 	}

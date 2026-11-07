@@ -128,7 +128,7 @@ func netnsWithTunnel(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0o644); err != nil {
+	if err := os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0o644); err != nil { //nolint:gosec // procfs entry, mode unused
 		t.Fatal(err)
 	}
 }
@@ -147,7 +147,7 @@ func TestForwardingWithoutTheFilter(t *testing.T) {
 	stub := func(body string) string {
 		dir := t.TempDir()
 		if body != "" {
-			if err := os.WriteFile(filepath.Join(dir, "nft"), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "nft"), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil { //nolint:gosec // the stub must be executable
 				t.Fatal(err)
 			}
 		}

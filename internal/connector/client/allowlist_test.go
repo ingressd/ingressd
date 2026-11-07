@@ -353,7 +353,7 @@ func TestDamagedAllowlistForwardsNothing(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			l.Close()
+			_ = l.Close()
 			st.Edges[0].Config.Subnets = append(st.Edges[0].Config.Subnets, "192.168.1.0/24")
 			st.reach = openReach(path, st, quiet)
 			if len(st.forwardPrefixes()) != 0 {
@@ -377,10 +377,10 @@ func TestUnsavableAllowlistStillRuns(t *testing.T) {
 	}
 	st, path := siteState(t, proto.TunnelConfig{Subnets: []string{"198.51.100.0/24"}})
 	dir := filepath.Dir(path)
-	if err := os.Chmod(dir, 0o500); err != nil {
+	if err := os.Chmod(dir, 0o500); err != nil { //nolint:gosec // the test needs an unwritable directory
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) }) //nolint:gosec // restores the directory for cleanup
 	st.reach = openReach(path, st, quiet)
 	if got := strs(st.forwardPrefixes()); !slices.Equal(got, []string{"198.51.100.0/24"}) {
 		t.Errorf("forwards %v", got)

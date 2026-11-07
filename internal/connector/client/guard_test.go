@@ -179,7 +179,7 @@ func TestReachabilityResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	addr := l.Addr().String()
-	l.Close()
+	_ = l.Close()
 	got := testReachability(context.Background(), []string{addr})
 	if len(got) != 1 || got[0].OK || got[0].Error != "unreachable" {
 		t.Errorf("%+v", got)
@@ -253,7 +253,7 @@ func TestRelayAnswersWireGuardSocket(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer c.CloseNow()
+		defer func() { _ = c.CloseNow() }()
 		for {
 			typ, b, err := c.Read(r.Context())
 			if err != nil {
@@ -271,7 +271,7 @@ func TestRelayAnswersWireGuardSocket(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { c.Close() })
+		t.Cleanup(func() { _ = c.Close() })
 		return c
 	}
 	wg, other := open(), open()
@@ -333,7 +333,7 @@ func TestPanelClientStaysOnThePanel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if hit || resp.StatusCode != http.StatusTemporaryRedirect {
 		t.Errorf("hit %v, status %d", hit, resp.StatusCode)
 	}
