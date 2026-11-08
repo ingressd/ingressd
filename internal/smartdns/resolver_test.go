@@ -181,6 +181,29 @@ func TestServiceAnsweredWithTransitIP(t *testing.T) {
 	}
 }
 
+func TestDirectServiceCarvedOutOfBroaderService(t *testing.T) {
+	upstream := fakeUpstream(t, "203.0.113.5")
+	m, fx := newTestManager(t, upstream)
+	plan := testPlan(upstream)
+	plan.Services["login"] = config.SmartDNSSiteService{Domains: []string{"id.stream.example"}, Direct: true}
+	m.Reconfigure(plan)
+
+	if r := query(m, "id.stream.example", dns.TypeA); strings.Join(aRecords(r), ",") != "203.0.113.5" {
+		t.Fatalf("direct name: %v", r)
+	}
+	if fx.resolves != 0 {
+		t.Errorf("exit asked %d times for a direct name", fx.resolves)
+	}
+	if r := query(m, "tv.stream.example", dns.TypeA); strings.Join(aRecords(r), ",") != "10.100.1.1" {
+		t.Fatalf("broader service: %v", r)
+	}
+	for _, s := range m.Services() {
+		if s.Name == "login" {
+			t.Errorf("direct service has exit status: %+v", s)
+		}
+	}
+}
+
 func TestAAAAAndHTTPSSuppressed(t *testing.T) {
 	m, fx := newTestManager(t, fakeUpstream(t, "203.0.113.5"))
 	for _, qt := range []uint16{dns.TypeAAAA, dns.TypeHTTPS, dns.TypeSVCB} {

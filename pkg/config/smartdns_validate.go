@@ -272,7 +272,11 @@ func (s *SmartDNSSite) Validate() error {
 		if !siteNameRe.MatchString(name) {
 			v.add(p, "name must match %s", siteNameRe)
 		}
-		s.validateServiceExits(v, p, svc)
+		if !svc.Direct {
+			s.validateServiceExits(v, p, svc)
+		} else if len(svc.Exits) > 0 {
+			v.add(p+".exits", "a direct service has no exits")
+		}
 		if len(svc.Domains) == 0 {
 			v.add(p+".domains", "at least one domain is required")
 		}

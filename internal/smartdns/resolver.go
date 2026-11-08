@@ -133,7 +133,8 @@ func (m *Manager) answer(localAddr, remoteAddr net.Addr, req *dns.Msg) *dns.Msg 
 	ctx, cancel := context.WithTimeout(m.ctx(), queryTimeout)
 	defer cancel()
 	r, routed := st.match.match(name)
-	if !routed {
+	if !routed || r.Direct {
+		entry.Service = r.Service
 		resp, err := m.forward(ctx, st, req)
 		if err != nil {
 			entry.Result = "SERVFAIL (upstream: " + err.Error() + ")"

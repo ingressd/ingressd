@@ -168,12 +168,12 @@ func (m *Manager) refreshActive(st *state) {
 	}
 }
 
-// routes returns one route per service, sorted by service.
+// routes returns one route per service using exits, sorted by service.
 func (mt matcher) routes() []route {
 	seen := map[string]bool{}
 	var out []route
 	for _, r := range mt {
-		if !seen[r.Service] {
+		if !r.Direct && !seen[r.Service] {
 			seen[r.Service] = true
 			out = append(out, r)
 		}
