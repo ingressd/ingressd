@@ -88,7 +88,7 @@ func (m *Manager) handleRelay(c net.Conn, isTLS bool) {
 	}
 	st := m.state()
 	r, ok := st.match.match(host)
-	if !ok {
+	if !ok || r.Direct {
 		m.refused.Add(1)
 		m.log.Info("relay refused: not a service hostname", "host", host, "client", client)
 		return

@@ -8,10 +8,12 @@ import (
 	"github.com/ingressd/ingressd/pkg/config"
 )
 
-// route is where a service's names go: its exits in order of preference.
+// route is where a service's names go: its exits in order of preference, or
+// straight out of the home connection when Direct.
 type route struct {
 	Service string
 	Exits   []string
+	Direct  bool
 }
 
 // matcher maps names to services by longest domain suffix.
@@ -23,7 +25,7 @@ func newMatcher(services map[string]config.SmartDNSSiteService) matcher {
 		if !svc.IsEnabled() {
 			continue
 		}
-		r := route{Service: name, Exits: svc.Exits}
+		r := route{Service: name, Exits: svc.Exits, Direct: svc.Direct}
 		for _, d := range svc.Domains {
 			m[normalize(d)] = r
 		}

@@ -76,10 +76,13 @@ type SmartDNSSite struct {
 }
 
 // SmartDNSSiteService routes its domains (suffix match) through its exits,
-// in order of preference.
+// in order of preference. A direct service has no exits: its domains are
+// answered by the upstream resolvers and leave through the home connection,
+// which carves a subdomain out of a broader service.
 type SmartDNSSiteService struct {
 	Domains []string `json:"domains"`
 	Exits   []string `json:"exits"`
+	Direct  bool     `json:"direct,omitempty"`
 	Enabled *bool    `json:"enabled,omitempty"` // default true
 	Catalog string   `json:"catalog,omitempty"` // informational
 }
